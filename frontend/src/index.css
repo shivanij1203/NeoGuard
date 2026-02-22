@@ -1,16 +1,41 @@
-* {
-  margin: 0;
-  padding: 0;
-  box-sizing: border-box;
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --neoguard-bg: #0f172a;
+  --neoguard-card: #1e293b;
+  --neoguard-border: #334155;
+  --pain-none: #22c55e;
+  --pain-mild: #eab308;
+  --pain-moderate: #f97316;
+  --pain-severe: #ef4444;
 }
 
 body {
   margin: 0;
-  min-width: 320px;
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  background-color: var(--neoguard-bg);
+  color: #e2e8f0;
   min-height: 100vh;
 }
 
-#root {
-  width: 100%;
-  min-height: 100vh;
+::-webkit-scrollbar {
+  width: 6px;
+}
+::-webkit-scrollbar-track {
+  background: var(--neoguard-bg);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--neoguard-border);
+  border-radius: 3px;
+}
+
+@keyframes pulse-alert {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+.alert-pulse {
+  animation: pulse-alert 1s ease-in-out infinite;
 }

@@ -1,26 +1,17 @@
-# Python
 __pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-venv/
-ENV/
+*.pyc
+*.pyo
 .env
-
-# Django
-*.log
-local_settings.py
-db.sqlite3
-media/
-
-# Node
+*.db
+venv/
+.venv/
 node_modules/
 dist/
+build/
 .DS_Store
-
-# IDE
-.idea/
-.vscode/
-*.swp
-*.swo
+*.joblib
+*.pth
+data/raw/
+data/processed/
+*.egg-info/
+.pytest_cache/
