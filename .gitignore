@@ -1,17 +1,48 @@
+# Python
 __pycache__/
+*.py[cod]
 *.pyc
 *.pyo
-.env
-*.db
+*$py.class
+*.so
+.Python
 venv/
 .venv/
+ENV/
+.env
+*.egg-info/
+.pytest_cache/
+
+# Django
+*.log
+local_settings.py
+db.sqlite3
+*.db
+media/
+
+# Node
 node_modules/
 dist/
 build/
 .DS_Store
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# ML artifacts
 *.joblib
 *.pth
 data/raw/
 data/processed/
-*.egg-info/
-.pytest_cache/
+
+# Videos and large media
+test_videos/
+*.mp4
+*.avi
+*.mov
+
+# Trained model binaries (regenerate with: python inference/train_models.py)
+inference/models/*.pkl
