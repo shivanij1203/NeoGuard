@@ -1,116 +1,38 @@
-# NeoGuard — Neonatal Pain Detection System
+# NeoGuard
 
-AI-powered continuous pain monitoring for NICU neonates using facial expression analysis and cry audio classification.
+Real-time pain monitoring for NICU neonates. Uses facial expression analysis and cry audio to detect pain continuously, instead of relying on nurses doing manual NIPS scores every few hours.
 
-## The Problem
+## How it works
 
-Premature and critically ill neonates in NICUs experience frequent painful procedures but are often too weak to cry. Current pain assessment relies on sporadic manual scoring by nurses. The only commercial solution (PainChek) does 3-second snapshots. NeoGuard provides **continuous real-time monitoring** with automatic nurse alerts.
+Camera captures the baby's face, MediaPipe extracts 468 facial landmarks, then we compute geometric features that map to pain-relevant Action Units (brow furrow, eye squeeze, mouth stretch, etc). Those go into an XGBoost classifier that outputs a 0-10 pain score.
 
-## How It Works
+On the audio side, microphone input gets run through librosa (MFCCs, spectral features, pitch) into another classifier that tells pain cries apart from hunger/tired cries.
 
-```
-Camera Feed → MediaPipe Face Mesh → AU-proxy Features → Pain Classifier ─┐
-                                                                          ├─→ Composite Score → Dashboard + Alerts
-Microphone  → librosa Features    → Cry Classifier    → Pain/Non-pain ──┘
-```
+Both scores combine 70/30 (face/audio) into a composite, and the dashboard shows it in real-time over WebSocket. Nurses get alerted when it crosses threshold.
 
-### Facial Pain Detection
-- **MediaPipe Face Mesh** extracts 468 facial landmarks in real-time
-- Geometric features map to neonatal pain Action Units (AU4, AU6+7, AU9+10, AU43, AU27)
-- XGBoost/RandomForest classifier produces pain score 0-10
+## Running it
 
-### Cry Audio Classification
-- **librosa** extracts MFCCs, spectral centroid, F0, RMS energy
-- XGBoost classifier distinguishes pain cries from hunger/tired/discomfort
-- Trained on 3 Kaggle infant cry datasets (294 MB total)
-
-### Composite Scoring (NIPS-Inspired)
-| Score | Level | Action |
-|-------|-------|--------|
-| 0-1 | No Pain (green) | — |
-| 2-3 | Mild Discomfort (yellow) | Monitor |
-| 4-6 | Moderate Pain (orange) | Notify nurse |
-| 7-10 | Severe Pain (red) | Urgent alert |
-
-**Weights:** Facial 70% + Audio 30%
-
-## Tech Stack
-
-| Layer | Technology |
-|-------|-----------|
-| Frontend | React 18 + Vite + TailwindCSS + Recharts |
-| Backend | FastAPI + Python 3.11 + SQLAlchemy + SQLite |
-| Real-time | WebSockets |
-| CV | MediaPipe Face Mesh + OpenCV |
-| ML | scikit-learn + XGBoost |
-| Audio | librosa |
-| Deployment | Docker Compose |
-
-## Quick Start
-
-### Prerequisites
-- Python 3.11+
-- Node.js 18+
-- Kaggle API credentials (for dataset download)
-
-### Backend
 ```bash
+# backend
 cd backend
-python -m venv venv
-source venv/bin/activate
 pip install -r requirements.txt
 uvicorn main:app --reload --port 8000
-```
 
-### Frontend
-```bash
+# frontend
 cd frontend
 npm install
 npm run dev
-```
 
-### Train Models
-```bash
-# Download datasets
-python ml_training/scripts/download_datasets.py
-
-# Train classifiers
-python ml_training/scripts/train_models.py --model all
-```
-
-### Docker
-```bash
+# or just docker
 docker-compose up --build
 ```
 
-## API Documentation
-
-Once running, visit `http://localhost:8000/docs` for interactive Swagger docs.
-
-### Key Endpoints
-- `GET /api/patients/` — List patients
-- `POST /api/patients/` — Add patient
-- `GET /api/scores/{patient_id}` — Pain score history
-- `WS /ws/monitor/{patient_id}` — Real-time monitoring
-- `WS /ws/dashboard` — Dashboard broadcast feed
-
-## Project Structure
-
-```
-NeoGuard/
-├── backend/          # FastAPI + ML pipeline
-│   ├── ml/           # Face detector, feature extractor, classifiers, scoring
-│   ├── routers/      # REST + WebSocket endpoints
-│   └── db/           # SQLAlchemy models
-├── frontend/         # React dashboard
-│   └── src/components/  # PainGauge, PainChart, CameraFeed, etc.
-├── ml_training/      # Training scripts + notebooks
-└── data/             # Datasets (not committed)
+Training (if you want to retrain from scratch):
+```bash
+python ml_training/scripts/download_datasets.py
+python ml_training/scripts/train_models.py --model all
 ```
 
-## Impact
+## Stack
 
-- **1 in 10 babies** need NICU care
-- Premature infants undergo **10-18 painful procedures daily**
-- Many are too weak to cry — their pain goes undetected
-- NeoGuard fills this gap with continuous, AI-powered monitoring
+FastAPI, SQLAlchemy, SQLite, MediaPipe, OpenCV, scikit-learn, XGBoost, librosa, React, Vite, Tailwind, Recharts, WebSockets, Docker
