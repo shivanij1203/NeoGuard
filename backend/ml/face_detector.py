@@ -7,10 +7,9 @@ logger = logging.getLogger(__name__)
 
 
 class FaceDetector:
-    """MediaPipe Face Mesh wrapper for extracting 468 facial landmarks."""
 
-    # Key landmark indices for neonatal pain Action Units
-    # Reference: https://github.com/google/mediapipe/blob/master/mediapipe/modules/face_geometry/data/canonical_face_model_uv_visualization.png
+    # MediaPipe Face Mesh landmark indices
+    # ref: https://github.com/google/mediapipe/blob/master/mediapipe/modules/face_geometry/data/canonical_face_model_uv_visualization.png
     LANDMARKS = {
         # Brow landmarks (AU4 - brow lowering)
         "left_brow": [70, 63, 105, 66, 107],
@@ -54,13 +53,8 @@ class FaceDetector:
         )
         self.mp_drawing = mp.solutions.drawing_utils
         self.mp_drawing_styles = mp.solutions.drawing_styles
-        logger.info("FaceDetector initialized with MediaPipe Face Mesh")
 
     def detect(self, frame: np.ndarray) -> dict | None:
-        """
-        Detect face and extract 468 landmarks from a BGR frame.
-        Returns dict with normalized and pixel landmarks, or None if no face found.
-        """
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         results = self.face_mesh.process(rgb_frame)
 
@@ -70,7 +64,6 @@ class FaceDetector:
         face_landmarks = results.multi_face_landmarks[0]
         h, w = frame.shape[:2]
 
-        # Convert to numpy arrays
         landmarks_norm = np.array(
             [(lm.x, lm.y, lm.z) for lm in face_landmarks.landmark]
         )
@@ -86,7 +79,6 @@ class FaceDetector:
         }
 
     def draw_landmarks(self, frame: np.ndarray, detection: dict) -> np.ndarray:
-        """Draw face mesh landmarks on frame for visualization."""
         annotated = frame.copy()
         self.mp_drawing.draw_landmarks(
             image=annotated,
@@ -98,7 +90,6 @@ class FaceDetector:
         return annotated
 
     def get_landmark_points(self, detection: dict, landmark_key: str) -> np.ndarray:
-        """Get pixel coordinates for a named landmark group."""
         indices = self.LANDMARKS[landmark_key]
         return detection["landmarks_px"][indices]
 

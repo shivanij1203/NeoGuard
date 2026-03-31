@@ -1,9 +1,5 @@
 #!/usr/bin/env python3
-"""
-Download cry audio datasets from Kaggle for NeoGuard training.
-Requires: pip install kaggle
-Setup: Place kaggle.json in ~/.kaggle/ with your API credentials.
-"""
+# Downloads cry audio + facial expression datasets from Kaggle.
 
 import os
 import subprocess

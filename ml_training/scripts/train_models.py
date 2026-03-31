@@ -1,14 +1,6 @@
 #!/usr/bin/env python3
-"""
-NeoGuard Model Training CLI
-
-Trains both the facial pain classifier and cry audio classifier.
-
-Usage:
-    python train_models.py --model facial    # Train facial pain classifier
-    python train_models.py --model cry       # Train cry audio classifier
-    python train_models.py --model all       # Train both
-"""
+# Train facial pain classifier and/or cry audio classifier.
+# Usage: python train_models.py --model facial|cry|all
 
 import argparse
 import sys
@@ -29,10 +21,6 @@ MODELS_DIR = BACKEND_DIR / "models"
 
 
 def train_cry_classifier():
-    """
-    Train XGBoost classifier on infant cry audio features.
-    Binary classification: pain cry (1) vs non-pain cry (0).
-    """
     print("\n" + "=" * 60)
     print("Training Cry Audio Classifier")
     print("=" * 60)
@@ -141,10 +129,6 @@ def train_cry_classifier():
 
 
 def train_facial_classifier():
-    """
-    Train facial pain classifier on geometric features.
-    Uses synthetic training data from MediaPipe Face Mesh.
-    """
     print("\n" + "=" * 60)
     print("Training Facial Pain Classifier")
     print("=" * 60)
@@ -249,10 +233,7 @@ def train_facial_classifier():
 
 
 def _train_facial_synthetic():
-    """
-    Train on synthetic geometric features when no image dataset is available.
-    Generates training data based on known AU-pain relationships.
-    """
+    # fallback when no image dataset available
     print("  Generating synthetic geometric training data...")
     np.random.seed(42)
 

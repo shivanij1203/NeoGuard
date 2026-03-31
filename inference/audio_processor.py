@@ -1,20 +1,4 @@
-"""
-Audio Feature Extractor — NeoGuard Inference Pipeline
-======================================================
-Extracts 33 features from 1-second audio chunks:
-
-  13 MFCC means      — average frequency pattern of the cry
-  13 MFCC stds       — how much those frequencies varied
-   1 Spectral centroid — center of mass of the sound
-   1 Spectral bandwidth — spread of frequencies
-   1 Spectral rolloff  — where high frequencies drop off
-   1 ZCR               — zero crossing rate (roughness)
-   1 RMS               — loudness / energy
-   1 F0 mean           — average pitch
-   1 F0 std            — pitch variation
-  ─────────────────────────────
-  33 total features
-"""
+# Extracts 33 audio features (MFCCs, spectral, pitch) for cry classification.
 
 import numpy as np
 import librosa
@@ -22,14 +6,6 @@ from typing import Optional
 
 
 class AudioFeatureExtractor:
-    """
-    Extracts 33 cry-detection features from audio.
-
-    Usage:
-        extractor = AudioFeatureExtractor()
-        features = extractor.extract_from_file("cry_clip.wav")
-        # features: np.ndarray of shape (33,)
-    """
 
     N_MFCC = 13
     SR = 22050       # target sample rate
@@ -37,17 +13,6 @@ class AudioFeatureExtractor:
     HOP_LENGTH = 256
 
     def extract(self, y: np.ndarray, sr: int) -> np.ndarray:
-        """
-        Extract 33 features from audio signal.
-
-        Args:
-            y:  Audio time series (mono)
-            sr: Sample rate
-
-        Returns:
-            np.ndarray of shape (33,)
-        """
-        # Resample to standard rate if needed
         if sr != self.SR:
             y = librosa.resample(y, orig_sr=sr, target_sr=self.SR)
             sr = self.SR
@@ -116,7 +81,6 @@ class AudioFeatureExtractor:
         return features
 
     def extract_from_file(self, audio_path: str) -> Optional[np.ndarray]:
-        """Extract 33 features from an audio file (wav, mp3, etc.)."""
         try:
             y, sr = librosa.load(audio_path, sr=None, mono=True)
             return self.extract(y, sr)
@@ -125,7 +89,6 @@ class AudioFeatureExtractor:
             return None
 
     def extract_from_bytes(self, audio_bytes: bytes) -> Optional[np.ndarray]:
-        """Extract 33 features from raw audio bytes."""
         import io
         try:
             y, sr = librosa.load(io.BytesIO(audio_bytes), sr=None, mono=True)

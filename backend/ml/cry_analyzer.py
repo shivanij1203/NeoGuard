@@ -11,17 +11,7 @@ logger = logging.getLogger(__name__)
 
 
 class CryAnalyzer:
-    """
-    Analyzes infant cry audio to classify pain vs non-pain cries.
 
-    Feature extraction: MFCCs, spectral centroid, spectral bandwidth,
-    spectral rolloff, zero-crossing rate, RMS energy, fundamental frequency.
-
-    Classification: XGBoost trained on Kaggle cry datasets.
-    Falls back to spectral heuristics if no trained model available.
-    """
-
-    # Pain-related cry categories from training datasets
     PAIN_LABELS = {"belly_pain", "discomfort", "pain"}
     NON_PAIN_LABELS = {"hungry", "tired", "burping", "lonely", "scared", "sleepy", "awake", "hug"}
 
@@ -43,13 +33,8 @@ class CryAnalyzer:
             logger.warning(f"No cry model at {model_path}, using spectral heuristics")
 
     def extract_features(self, audio: np.ndarray, sr: int | None = None) -> np.ndarray:
-        """
-        Extract audio features from a waveform.
-        Returns feature vector of length 33.
-        """
         sr = sr or self.sr
 
-        # Ensure minimum length
         min_samples = int(sr * 0.5)
         if len(audio) < min_samples:
             audio = np.pad(audio, (0, min_samples - len(audio)))
@@ -90,13 +75,8 @@ class CryAnalyzer:
         return np.array(features, dtype=np.float32)
 
     def predict(self, audio: np.ndarray, sr: int | None = None) -> dict:
-        """
-        Classify audio as pain cry, non-pain cry, or no cry.
-        Returns dict with cry classification and audio-based pain score.
-        """
         sr = sr or self.sr
 
-        # Check if there's enough audio energy to be a cry
         rms = np.sqrt(np.mean(audio ** 2))
         if rms < 0.01:
             return {
@@ -130,21 +110,15 @@ class CryAnalyzer:
             return self._heuristic_classify(audio, sr, features)
 
     def predict_from_bytes(self, audio_bytes: bytes) -> dict:
-        """Classify from raw audio bytes (WAV format)."""
         audio, sr = librosa.load(BytesIO(audio_bytes), sr=self.sr, mono=True)
         return self.predict(audio, sr)
 
     def predict_from_file(self, file_path: str | Path) -> dict:
-        """Classify from an audio file path."""
         audio, sr = librosa.load(str(file_path), sr=self.sr, mono=True)
         return self.predict(audio, sr)
 
     def _heuristic_classify(self, audio: np.ndarray, sr: int, features: np.ndarray) -> dict:
-        """
-        Rule-based cry classification using spectral features.
-        Pain cries tend to have: higher pitch, more energy variation, specific spectral shape.
-        """
-        # Extract key features from the feature vector
+        # spectral heuristics fallback — pain cries have higher pitch + more energy
         mfcc_means = features[:13]
         spectral_centroid = features[26]
         rms_energy = features[30]
@@ -188,7 +162,6 @@ class CryAnalyzer:
         }
 
     def get_feature_names(self) -> list[str]:
-        """Return ordered feature names for training reference."""
         names = []
         for i in range(13):
             names.append(f"mfcc_{i}_mean")

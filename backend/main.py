@@ -25,12 +25,7 @@ async def lifespan(app: FastAPI):
     logger.info("Shutting down NeoGuard backend")
 
 
-app = FastAPI(
-    title="NeoGuard API",
-    description="Neonatal Pain Detection System — Real-time monitoring API",
-    version="1.0.0",
-    lifespan=lifespan,
-)
+app = FastAPI(title="NeoGuard API", version="1.0.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,

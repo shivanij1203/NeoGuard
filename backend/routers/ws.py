@@ -12,7 +12,6 @@ router = APIRouter()
 
 
 class ConnectionManager:
-    """Manages WebSocket connections for real-time pain score broadcasting."""
 
     def __init__(self):
         self.active_connections: list[WebSocket] = []
@@ -45,15 +44,13 @@ async def monitor_patient(websocket: WebSocket, patient_id: int):
     await manager.connect(websocket)
     try:
         while True:
-            # Receive frame/audio data from client or just keep-alive
             data = await websocket.receive_text()
             msg = json.loads(data)
 
             if msg.get("type") == "ping":
                 await websocket.send_json({"type": "pong"})
             elif msg.get("type") == "frame":
-                # Process frame through ML pipeline (imported at runtime to avoid circular)
-                from ml.scoring import process_frame_data
+                from ml.scoring import process_frame_data  # deferred to avoid circular
                 result = await process_frame_data(msg.get("data"), patient_id)
                 await websocket.send_json({
                     "type": "pain_update",
@@ -61,7 +58,6 @@ async def monitor_patient(websocket: WebSocket, patient_id: int):
                     "timestamp": datetime.utcnow().isoformat(),
                     **result,
                 })
-                # Broadcast to all dashboard connections
                 await manager.broadcast({
                     "type": "pain_update",
                     "patient_id": patient_id,
@@ -75,7 +71,6 @@ async def monitor_patient(websocket: WebSocket, patient_id: int):
 
 @router.websocket("/ws/dashboard")
 async def dashboard_feed(websocket: WebSocket):
-    """Dashboard receives all patient updates via broadcast."""
     await manager.connect(websocket)
     try:
         while True:

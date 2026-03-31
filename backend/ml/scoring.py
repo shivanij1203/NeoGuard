@@ -10,7 +10,6 @@ from ml.cry_analyzer import CryAnalyzer
 
 logger = logging.getLogger(__name__)
 
-# Singleton instances
 _facial_classifier: FacialPainClassifier | None = None
 _cry_analyzer: CryAnalyzer | None = None
 
@@ -33,13 +32,6 @@ def compute_composite_score(
     facial_score: float | None,
     audio_score: float | None,
 ) -> dict:
-    """
-    Compute composite pain score using weighted combination.
-    NIPS-inspired scale: 0-10.
-
-    Weights: facial 70%, audio 30% (when both available).
-    If only one modality available, use it alone.
-    """
     facial_w = settings.facial_weight
     audio_w = settings.audio_weight
 
@@ -54,7 +46,6 @@ def compute_composite_score(
 
     composite = round(np.clip(composite, 0, 10), 2)
 
-    # Determine alert level
     if composite >= settings.pain_urgent_threshold:
         alert_level = "severe"
     elif composite >= settings.pain_alert_threshold:
@@ -71,7 +62,6 @@ def compute_composite_score(
 
 
 def get_pain_label(score: float) -> dict:
-    """Get human-readable pain level info from score."""
     if score <= 1:
         return {"level": "No Pain", "color": "#22c55e", "severity": 0}
     elif score <= 3:
@@ -83,17 +73,12 @@ def get_pain_label(score: float) -> dict:
 
 
 async def process_frame_data(data: dict | None, patient_id: int) -> dict:
-    """
-    Process incoming frame/audio data from WebSocket.
-    Called by the WebSocket handler for real-time scoring.
-    """
     if data is None:
         return compute_composite_score(None, None)
 
     facial_result = None
     audio_result = None
 
-    # Process video frame if present
     if "frame" in data:
         try:
             frame_bytes = base64.b64decode(data["frame"])
@@ -105,7 +90,6 @@ async def process_frame_data(data: dict | None, patient_id: int) -> dict:
         except Exception as e:
             logger.error(f"Error processing frame: {e}")
 
-    # Process audio chunk if present
     if "audio" in data:
         try:
             audio_bytes = base64.b64decode(data["audio"])
@@ -128,7 +112,6 @@ async def process_frame_data(data: dict | None, patient_id: int) -> dict:
         "cry_type": audio_result.get("cry_type", "no_cry") if audio_result else "no_cry",
     }
 
-    # Include feature details if face detected
     if facial_result and facial_result.get("face_detected"):
         features = facial_result.get("features", {})
         result["brow_furrow"] = features.get("brow_eye_dist_norm")

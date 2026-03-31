@@ -1,15 +1,5 @@
 #!/usr/bin/env python3
-"""
-NeoGuard Live Webcam Demo
-=========================
-Runs MediaPipe Face Mesh on webcam feed with real-time pain score overlay.
-Press 'q' to quit.
-
-Usage:
-    cd backend
-    source venv/bin/activate
-    python demo_webcam.py
-"""
+# Webcam demo — runs face mesh + pain scoring with overlay. Press q to quit.
 
 import cv2
 import numpy as np
@@ -22,7 +12,6 @@ from ml.scoring import get_pain_label
 
 
 def draw_pain_overlay(frame, score, features, face_detected, fps):
-    """Draw pain score HUD overlay on frame."""
     h, w = frame.shape[:2]
     label = get_pain_label(score)
 
@@ -104,11 +93,9 @@ def draw_pain_overlay(frame, score, features, face_detected, fps):
 
 
 def draw_key_landmarks(frame, landmarks_px):
-    """Draw key pain-relevant landmarks highlighted on the face."""
     if landmarks_px is None:
         return frame
 
-    # Key landmark groups with colors
     groups = {
         "brow": ([70, 63, 105, 66, 107, 336, 296, 334, 293, 300], (0, 200, 255)),   # Orange - brow
         "eyes": ([33, 160, 158, 133, 153, 144, 362, 385, 387, 263, 373, 380], (255, 200, 0)),  # Cyan - eyes
@@ -126,7 +113,6 @@ def draw_key_landmarks(frame, landmarks_px):
 
 
 def hex_to_bgr(hex_color):
-    """Convert hex color string to BGR tuple."""
     hex_color = hex_color.lstrip('#')
     r, g, b = int(hex_color[0:2], 16), int(hex_color[2:4], 16), int(hex_color[4:6], 16)
     return (b, g, r)

@@ -35,11 +35,6 @@ class AnalysisResponse(BaseModel):
 
 @router.post("/frame", response_model=AnalysisResponse)
 async def analyze_frame(request: FrameRequest):
-    """
-    Analyze a single video frame for facial pain indicators.
-    Accepts base64-encoded JPEG image.
-    Returns pain score, features, and landmark coordinates for overlay.
-    """
     try:
         frame_bytes = base64.b64decode(request.frame)
         nparr = np.frombuffer(frame_bytes, np.uint8)
@@ -55,7 +50,6 @@ async def analyze_frame(request: FrameRequest):
         composite = compute_composite_score(facial_score, None)
         label = get_pain_label(composite["composite_score"])
 
-        # Convert landmarks to serializable format
         landmarks_list = None
         if result.get("landmarks") is not None:
             landmarks_list = result["landmarks"][:, :2].tolist()  # x, y only
@@ -81,10 +75,6 @@ async def analyze_frame(request: FrameRequest):
 
 @router.post("/audio")
 async def analyze_audio(file: UploadFile = File(...)):
-    """
-    Analyze an audio clip for cry classification.
-    Accepts WAV/MP3 file upload.
-    """
     try:
         contents = await file.read()
         analyzer = get_cry_analyzer()

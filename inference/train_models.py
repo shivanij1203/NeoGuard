@@ -1,24 +1,5 @@
-"""
-Model Training — NeoGuard Inference Pipeline
-=============================================
-Generates clinically-grounded synthetic training data and trains:
-
-  1. XGBRegressor  — predicts pain score 0-10 from 13 AU video features
-  2. XGBClassifier — predicts cry probability from 33 audio features
-
-Synthetic data rationale:
-  Real NICU data is PHI-restricted and not publicly available.
-  Synthetic data is generated using known clinical relationships between
-  facial action units / cry acoustics and pain levels, matching patterns
-  documented in published neonatal pain research (NIPS, NFCS scales).
-
-Run:
-  python train_models.py
-
-Outputs:
-  models/pain_video_model.pkl
-  models/cry_audio_model.pkl
-"""
+# Trains XGBRegressor (video pain) and XGBClassifier (cry detection)
+# on synthetic data since real NICU data is PHI-restricted.
 
 import numpy as np
 import pickle
@@ -35,22 +16,8 @@ RANDOM_STATE = 42
 np.random.seed(RANDOM_STATE)
 
 
-# ─────────────────────────────────────────────
-# VIDEO MODEL — 13 AU features → pain score 0-10
-# ─────────────────────────────────────────────
-
 def generate_video_data(n: int):
-    """
-    Generate synthetic AU feature vectors with corresponding pain scores.
-
-    Clinical logic:
-      - Higher AU4 (brow lowering): strong pain indicator
-      - Higher AU9 (nose wrinkle): moderate pain indicator
-      - Higher AU20 (lip stretch): pain indicator
-      - Higher AU25 (lips part): cry/pain indicator
-      - Tighter eye closure (AU43): pain indicator
-      - Smaller inter-brow distance (AU1): brow furrow = pain
-    """
+    # synthetic AU features correlated with pain level (NIPS/NFCS-based)
     X = np.zeros((n, 13), dtype=np.float32)
     y = np.zeros(n, dtype=np.float32)
 
@@ -137,20 +104,8 @@ def train_video_model():
     return model
 
 
-# ─────────────────────────────────────────────
-# AUDIO MODEL — 33 features → cry probability
-# ─────────────────────────────────────────────
-
 def generate_audio_data(n: int):
-    """
-    Generate synthetic audio feature vectors with cry labels.
-
-    Clinical logic (from cry acoustics research):
-      - Crying increases MFCC energy (higher means, stds)
-      - Cry has higher F0 (pitch) and more pitch variation
-      - Cry has higher ZCR and RMS (energy)
-      - Spectral centroid shifts upward during cry
-    """
+    # synthetic audio features — cry vs non-cry
     X = np.zeros((n, 33), dtype=np.float32)
     y = np.zeros(n, dtype=np.int32)
 

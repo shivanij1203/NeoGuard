@@ -1,34 +1,5 @@
-"""
-NICU Image Quality Filter - Standalone Module
-==============================================
-
-A lightweight quality pre-screening tool for NICU neonatal pain research.
-Addresses challenges from published research:
-1. Dark images (pixel intensity ≤25) are unusable
-2. Occlusion from medical equipment blocks faces
-
-Usage:
-    from nicu_quality_filter import QualityFilter
-
-    filter = QualityFilter()
-
-    # Single image
-    result = filter.check(image)
-    if result['usable']:
-        # proceed with annotation/training
-
-    # Video - get only usable frames
-    usable_frames = filter.filter_video("video.mp4")
-
-Requirements:
-    pip install opencv-python numpy mediapipe
-
-References:
-    - "Accurate Neonatal Face Detection for Improved Pain Classification
-       in the Challenging NICU Setting" (IEEE Access, 2024)
-
-Author: [Your Name] - USF RPAL Collaboration
-"""
+# Quality filter for NICU images — rejects dark frames and frames without
+# visible faces, based on thresholds from IEEE Access 2024 neonatal face paper.
 
 import cv2
 import numpy as np
@@ -38,7 +9,6 @@ from dataclasses import dataclass
 
 @dataclass
 class QualityResult:
-    """Simple result container"""
     usable: bool
     usability: str  # "usable", "marginal", "unusable"
     score: float  # 0-100
@@ -50,21 +20,11 @@ class QualityResult:
 
 
 class QualityFilter:
-    """
-    Lightweight quality filter for NICU images.
 
-    Designed to integrate easily into existing Python ML pipelines.
-    No web framework dependencies - just OpenCV and NumPy.
-    """
-
-    # Threshold from IEEE Access 2024 paper
+    # dark threshold from IEEE Access 2024 paper
     DARK_THRESHOLD = 25  # Pixel intensity ≤25 = unusable
 
     def __init__(self, use_face_detection: bool = True):
-        """
-        Args:
-            use_face_detection: Enable face detection (requires mediapipe)
-        """
         self.use_face_detection = use_face_detection
         self.face_detector = None
 
@@ -80,15 +40,6 @@ class QualityFilter:
                 self.use_face_detection = False
 
     def check(self, image: np.ndarray) -> QualityResult:
-        """
-        Check if a single image/frame is usable.
-
-        Args:
-            image: BGR image as numpy array (OpenCV format)
-
-        Returns:
-            QualityResult with usability assessment
-        """
         issues = []
 
         # Convert to grayscale
@@ -97,14 +48,14 @@ class QualityFilter:
         else:
             gray = image
 
-        # 1. Brightness check (from research paper)
+        # brightness check
         brightness = np.mean(gray)
         is_too_dark = brightness <= self.DARK_THRESHOLD
 
         if is_too_dark:
             issues.append(f"Too dark (brightness: {brightness:.1f}, threshold: {self.DARK_THRESHOLD})")
 
-        # 2. Face detection (with fallback to Haar cascade)
+        # face detection
         face_detected = True  # Default if detection disabled
         face_confidence = 1.0
         face_status = "detected"  # detected, uncertain, not_detected
@@ -113,7 +64,7 @@ class QualityFilter:
             face_detected = False
             face_confidence = 0.0
 
-            # Try MediaPipe first
+            # mediapipe first, haar cascade fallback
             if self.face_detector:
                 rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
                 results = self.face_detector.process(rgb)
@@ -127,7 +78,6 @@ class QualityFilter:
                         face_detected = True
                         face_status = "uncertain"
 
-            # Fallback to Haar cascade if MediaPipe didn't detect
             if not face_detected:
                 haar = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
                 faces = haar.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=3, minSize=(30, 30))
@@ -140,7 +90,7 @@ class QualityFilter:
                 face_status = "not_detected"
                 issues.append("No face detected (possibly occluded)")
 
-        # Calculate score
+        # quality score
         score = 100.0
         if is_too_dark:
             score -= 50
@@ -151,7 +101,7 @@ class QualityFilter:
 
         score = max(0, min(100, score))
 
-        # Determine usability
+        # final verdict
         if is_too_dark or face_status == "not_detected":
             usability = "unusable"
             usable = False
@@ -174,20 +124,9 @@ class QualityFilter:
         )
 
     def check_batch(self, images: List[np.ndarray]) -> List[QualityResult]:
-        """Check multiple images at once."""
         return [self.check(img) for img in images]
 
     def filter_video(self, video_path: str, fps: float = 1.0) -> Generator[Tuple[int, np.ndarray, QualityResult], None, None]:
-        """
-        Filter video frames, yielding only usable ones.
-
-        Args:
-            video_path: Path to video file
-            fps: Frames to extract per second (default: 1)
-
-        Yields:
-            Tuple of (frame_number, frame_image, quality_result)
-        """
         cap = cv2.VideoCapture(video_path)
 
         if not cap.isOpened():
@@ -214,16 +153,6 @@ class QualityFilter:
         cap.release()
 
     def get_usable_frames(self, video_path: str, fps: float = 1.0) -> List[Tuple[int, np.ndarray]]:
-        """
-        Get only usable frames from a video.
-
-        Args:
-            video_path: Path to video file
-            fps: Frames to extract per second
-
-        Returns:
-            List of (frame_number, frame_image) tuples for usable frames only
-        """
         usable = []
         for frame_num, frame, result in self.filter_video(video_path, fps):
             if result.usable:
@@ -231,16 +160,6 @@ class QualityFilter:
         return usable
 
     def analyze_video(self, video_path: str, fps: float = 1.0) -> Dict:
-        """
-        Analyze entire video and return summary statistics.
-
-        Args:
-            video_path: Path to video file
-            fps: Frames to extract per second
-
-        Returns:
-            Dictionary with summary stats
-        """
         results = list(self.filter_video(video_path, fps))
 
         total = len(results)
@@ -264,7 +183,6 @@ class QualityFilter:
         }
 
 
-# === EXAMPLE USAGE ===
 if __name__ == "__main__":
     import sys
 

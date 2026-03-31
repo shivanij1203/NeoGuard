@@ -11,14 +11,6 @@ logger = logging.getLogger(__name__)
 
 
 class FacialPainClassifier:
-    """
-    Classifies facial pain from MediaPipe Face Mesh landmarks.
-
-    Pipeline: Frame → FaceDetector → FeatureExtractor → Classifier → Pain Score (0-10)
-
-    Uses a trained XGBoost/RandomForest model on geometric AU-proxy features.
-    Falls back to rule-based scoring if no trained model is available.
-    """
 
     def __init__(self):
         self.face_detector = FaceDetector(
@@ -38,10 +30,6 @@ class FacialPainClassifier:
             logger.warning(f"No trained model at {model_path}, using rule-based scoring")
 
     def predict(self, frame: np.ndarray) -> dict:
-        """
-        Predict pain score from a BGR video frame.
-        Returns dict with score, features, and detection info.
-        """
         detection = self.face_detector.detect(frame)
 
         if detection is None:
@@ -56,11 +44,9 @@ class FacialPainClassifier:
         feature_array = self.feature_extractor.features_to_array(features)
 
         if self.model is not None:
-            # Use trained model
             score = float(self.model.predict(feature_array.reshape(1, -1))[0])
             score = np.clip(score, 0, 10)
         else:
-            # Rule-based fallback using AU-proxy thresholds
             score = self._rule_based_score(features)
 
         return {
@@ -71,7 +57,6 @@ class FacialPainClassifier:
         }
 
     def predict_with_overlay(self, frame: np.ndarray) -> tuple[dict, np.ndarray]:
-        """Predict and return annotated frame with face mesh overlay."""
         detection = self.face_detector.detect(frame)
 
         if detection is None:
@@ -101,10 +86,7 @@ class FacialPainClassifier:
         }, annotated_frame
 
     def _rule_based_score(self, features: dict) -> float:
-        """
-        Rule-based pain scoring using NIPS-inspired thresholds.
-        Each AU contributes 0-2 points, total scaled to 0-10.
-        """
+        # NIPS-inspired thresholds when no trained model available
         score = 0.0
 
         # AU4: Brow furrow — low brow-eye distance = pain
