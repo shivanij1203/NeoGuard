@@ -29,6 +29,17 @@ class FacialPainClassifier:
         else:
             logger.warning(f"No trained model at {model_path}, using rule-based scoring")
 
+    # OOD heuristics. The trained model has no "I don't know" output, so we gate
+    # on cheap geometric signals instead of letting it extrapolate on adults.
+    # Either threshold tripping is enough to flag OOD.
+    INFANT_ASPECT_MAX = 1.18  # face height/width; adults usually >1.2
+    INFANT_IPD_MIN = 0.40     # inter-pupillary / face-width; adults usually <0.40
+
+    def _is_out_of_distribution(self, features: dict) -> bool:
+        aspect = features.get("face_aspect_ratio", 0.0)
+        ipd_ratio = features.get("ipd_face_width_ratio", 0.5)
+        return aspect > self.INFANT_ASPECT_MAX or ipd_ratio < self.INFANT_IPD_MIN
+
     def predict(self, frame: np.ndarray) -> dict:
         detection = self.face_detector.detect(frame)
 
@@ -38,14 +49,26 @@ class FacialPainClassifier:
                 "facial_score": 0.0,
                 "features": {},
                 "landmarks": None,
+                "out_of_distribution": False,
             }
 
         features = self.feature_extractor.extract(detection["landmarks_px"])
+
+        if self._is_out_of_distribution(features):
+            return {
+                "face_detected": True,
+                "facial_score": None,
+                "features": features,
+                "landmarks": detection["landmarks_px"],
+                "out_of_distribution": True,
+                "ood_reason": "subject_not_infant",
+            }
+
         feature_array = self.feature_extractor.features_to_array(features)
 
         if self.model is not None:
             score = float(self.model.predict(feature_array.reshape(1, -1))[0])
-            score = np.clip(score, 0, 10)
+            score = float(np.clip(score, 0, 10))
         else:
             score = self._rule_based_score(features)
 
@@ -54,6 +77,7 @@ class FacialPainClassifier:
             "facial_score": round(score, 2),
             "features": features,
             "landmarks": detection["landmarks_px"],
+            "out_of_distribution": False,
         }
 
     def predict_with_overlay(self, frame: np.ndarray) -> tuple[dict, np.ndarray]:

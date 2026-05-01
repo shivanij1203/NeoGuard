@@ -98,11 +98,26 @@ async def process_frame_data(data: dict | None, patient_id: int) -> dict:
         except Exception as e:
             logger.error(f"Error processing audio: {e}")
 
-    facial_score = facial_result["facial_score"] if facial_result and facial_result.get("face_detected") else None
+    out_of_distribution = bool(facial_result and facial_result.get("out_of_distribution"))
+
+    facial_score = (
+        facial_result["facial_score"]
+        if facial_result and facial_result.get("face_detected") and not out_of_distribution
+        else None
+    )
     audio_score = audio_result["audio_score"] if audio_result else None
 
-    composite = compute_composite_score(facial_score, audio_score)
-    pain_label = get_pain_label(composite["composite_score"])
+    if out_of_distribution:
+        composite = {
+            "composite_score": 0.0,
+            "alert_level": "none",
+            "facial_score": None,
+            "audio_score": audio_score,
+        }
+        pain_label = {"level": "Subject Not Recognized", "color": "#94a3b8", "severity": -1}
+    else:
+        composite = compute_composite_score(facial_score, audio_score)
+        pain_label = get_pain_label(composite["composite_score"])
 
     result = {
         **composite,
@@ -110,6 +125,8 @@ async def process_frame_data(data: dict | None, patient_id: int) -> dict:
         "face_detected": facial_result.get("face_detected", False) if facial_result else False,
         "cry_detected": audio_result.get("cry_detected", False) if audio_result else False,
         "cry_type": audio_result.get("cry_type", "no_cry") if audio_result else "no_cry",
+        "out_of_distribution": out_of_distribution,
+        "ood_reason": facial_result.get("ood_reason") if facial_result else None,
     }
 
     if facial_result and facial_result.get("face_detected"):

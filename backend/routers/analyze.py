@@ -29,8 +29,9 @@ class AnalysisResponse(BaseModel):
     cry_detected: bool
     cry_type: str
     timestamp: str
-    # Landmark data for overlay rendering
     landmarks: list[list[float]] | None = None
+    out_of_distribution: bool = False
+    ood_reason: str | None = None
 
 
 @router.post("/frame", response_model=AnalysisResponse)
@@ -46,13 +47,23 @@ async def analyze_frame(request: FrameRequest):
         classifier = get_facial_classifier()
         result = classifier.predict(frame)
 
-        facial_score = result["facial_score"] if result["face_detected"] else None
-        composite = compute_composite_score(facial_score, None)
-        label = get_pain_label(composite["composite_score"])
+        ood = bool(result.get("out_of_distribution"))
+        facial_score = (
+            result["facial_score"]
+            if result["face_detected"] and not ood
+            else None
+        )
+
+        if ood:
+            composite = {"composite_score": 0.0, "alert_level": "none"}
+            label = {"level": "Subject Not Recognized", "color": "#94a3b8", "severity": -1}
+        else:
+            composite = compute_composite_score(facial_score, None)
+            label = get_pain_label(composite["composite_score"])
 
         landmarks_list = None
         if result.get("landmarks") is not None:
-            landmarks_list = result["landmarks"][:, :2].tolist()  # x, y only
+            landmarks_list = result["landmarks"][:, :2].tolist()
 
         return AnalysisResponse(
             face_detected=result["face_detected"],
@@ -66,6 +77,8 @@ async def analyze_frame(request: FrameRequest):
             cry_type="no_cry",
             timestamp=datetime.utcnow().isoformat(),
             landmarks=landmarks_list,
+            out_of_distribution=ood,
+            ood_reason=result.get("ood_reason"),
         )
 
     except Exception as e:

@@ -54,6 +54,13 @@ class FeatureExtractor:
 
         features = {}
 
+        # OOD signals (not part of the 13-feature model input vector).
+        # Face aspect: infants ~1.0-1.2, adults ~1.3-1.55.
+        features["face_aspect_ratio"] = face_height / max(face_width, 1.0)
+        # Inter-pupillary distance relative to face width: infants ~0.42-0.48, adults ~0.32-0.38.
+        ipd = self._dist(landmarks, self.LEFT_EYE_RIGHT, self.RIGHT_EYE_LEFT)
+        features["ipd_face_width_ratio"] = ipd / max(face_width, 1.0)
+
         # AU4 brow furrow — distance decreases when brow furrows
         left_brow_eye_dist = self._dist(landmarks, self.LEFT_BROW_MID, self.LEFT_EYE_TOP)
         right_brow_eye_dist = self._dist(landmarks, self.RIGHT_BROW_MID, self.RIGHT_EYE_TOP)
