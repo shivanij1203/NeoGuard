@@ -43,6 +43,11 @@ manager = ConnectionManager()
 @router.websocket("/ws/monitor/{patient_id}")
 async def monitor_patient(websocket: WebSocket, patient_id: int):
     await manager.connect(websocket)
+    # Per-connection MC dropout cadence state. Lives in this handler's local
+    # scope so a disconnect drops the state and a long-running service does
+    # not accumulate it.
+    from ml.ncnn.stream_state import FacialStreamState
+    stream_state = FacialStreamState()
     try:
         while True:
             # Receive frame/audio data from client or just keep-alive
@@ -54,20 +59,18 @@ async def monitor_patient(websocket: WebSocket, patient_id: int):
             elif msg.get("type") == "frame":
                 # Process frame through ML pipeline (imported at runtime to avoid circular)
                 from ml.scoring import process_frame_data
-                result = await process_frame_data(msg.get("data"), patient_id)
-                await websocket.send_json({
+                result, stream_state = await process_frame_data(
+                    msg.get("data"), patient_id, stream_state
+                )
+                payload = {
                     "type": "pain_update",
                     "patient_id": patient_id,
                     "timestamp": datetime.utcnow().isoformat(),
                     **result,
-                })
+                }
+                await websocket.send_json(payload)
                 # Broadcast to all dashboard connections
-                await manager.broadcast({
-                    "type": "pain_update",
-                    "patient_id": patient_id,
-                    "timestamp": datetime.utcnow().isoformat(),
-                    **result,
-                })
+                await manager.broadcast(payload)
 
     except WebSocketDisconnect:
         manager.disconnect(websocket)
