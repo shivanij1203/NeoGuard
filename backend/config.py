@@ -23,6 +23,9 @@ class Settings(BaseSettings):
     models_dir: Path = Path(__file__).parent / "models"
     facial_model_path: Path = Path(__file__).parent / "models" / "facial_pain_clf.joblib"
     cry_model_path: Path = Path(__file__).parent / "models" / "cry_clf.joblib"
+    # Facial model checkpoint path for the N-CNN. None until a subject-wise CV
+    # training run produces one. The N-CNN ships with random weights until then.
+    ncnn_checkpoint_path: Path | None = None
 
     # WebSocket
     ws_broadcast_interval: float = 0.5  # seconds
@@ -30,6 +33,28 @@ class Settings(BaseSettings):
     # Audio settings
     audio_sample_rate: int = 22050
     audio_duration: float = 3.0  # seconds per analysis window
+
+    # N-CNN settings (research prototype, not a medical device).
+    # TODO: confirm against IJCNN 2019 source for any value flagged below.
+    ncnn_input_size: int = 120  # TODO: confirm against IJCNN 2019 source
+    ncnn_dropout: float = 0.5  # TODO: confirm against IJCNN 2019 source
+    ncnn_dense_width: int = 128  # TODO: confirm against IJCNN 2019 source
+    # Per-channel normalization placeholders. Zero mean and unit std are a no-op
+    # by design. This model trains from scratch, so ImageNet stats are wrong here.
+    # TODO: compute mean and std on the training set once data lands.
+    ncnn_norm_mean: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    ncnn_norm_std: tuple[float, float, float] = (1.0, 1.0, 1.0)
+    # MC dropout cadence: 1 deterministic pass per frame for prob_pain, K-pass
+    # MC dropout for uncertainty on a throttle. Both knobs are configurable.
+    ncnn_mc_passes: int = 20
+    ncnn_mc_interval_frames: int = 30  # roughly once a second at 30 FPS
+    # Pain class index in the softmax output. Class 0 = no pain, class 1 = pain.
+    ncnn_pain_class_index: int = 1
+    # Face crop gate parameters.
+    # Margin as a fraction of bbox side, added on each edge before cropping.
+    ncnn_crop_margin_ratio: float = 0.15
+    # Minimum bbox side (post-margin) in pixels. Smaller crops are rejected.
+    ncnn_min_face_size_px: int = 32
 
     class Config:
         env_prefix = "NEOGUARD_"
