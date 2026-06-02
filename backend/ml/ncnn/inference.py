@@ -14,10 +14,6 @@ predict_pain wraps these for the public API. It accepts a face crop, returns
 accept a cached value so the caller can throttle MC dropout without
 restructuring this module.
 
-The crop-to-tensor conversion is done inline here for now. A later phase
-moves it into a dedicated preprocess module with a hardened input contract
-and a landmark-based face crop gate; this module will delegate to it then.
-
 Checkpoint loading: the model uses LazyLinear, so a checkpoint cannot be
 loaded until the lazy layer has been materialized. Call load_ncnn_state_dict
 rather than nn.Module.load_state_dict directly; it runs one dummy forward
@@ -36,51 +32,7 @@ import torch.nn as nn
 
 from ml.ncnn.calibration import TemperatureScaler
 from ml.ncnn.model import NCNN
-
-try:
-    import cv2  # type: ignore
-except ImportError:  # pragma: no cover - cv2 is in requirements
-    cv2 = None
-
-
-def _crop_to_tensor(
-    face_crop_rgb: np.ndarray,
-    input_size: int,
-    mean: Sequence[float],
-    std: Sequence[float],
-) -> torch.Tensor:
-    """Resize an RGB face crop, scale to [0, 1], standardize per channel, and
-    return a (1, 3, H, W) float32 tensor. Inline for now; a later phase
-    extracts this into a preprocess module with a stricter input contract."""
-    if face_crop_rgb is None:
-        raise ValueError("face_crop_rgb is None")
-    if face_crop_rgb.ndim != 3 or face_crop_rgb.shape[2] != 3:
-        raise ValueError(
-            f"expected (H, W, 3) RGB array, got shape {face_crop_rgb.shape}"
-        )
-    if cv2 is None:
-        raise RuntimeError("cv2 is required for the crop-to-tensor conversion")
-    if len(mean) != 3 or len(std) != 3:
-        raise ValueError("mean and std must each have length 3")
-
-    resized = cv2.resize(
-        face_crop_rgb, (input_size, input_size), interpolation=cv2.INTER_AREA
-    )
-    if resized.dtype == np.uint8:
-        arr = resized.astype(np.float32) / 255.0
-    elif np.issubdtype(resized.dtype, np.floating):
-        arr = resized.astype(np.float32)
-    else:
-        raise ValueError(
-            f"unsupported dtype {resized.dtype}; expected uint8 or float"
-        )
-
-    mean_arr = np.asarray(mean, dtype=np.float32).reshape(1, 1, 3)
-    std_arr = np.asarray(std, dtype=np.float32).reshape(1, 1, 3)
-    arr = (arr - mean_arr) / std_arr
-
-    chw = np.transpose(arr, (2, 0, 1))
-    return torch.from_numpy(np.ascontiguousarray(chw)).unsqueeze(0)
+from ml.ncnn.preprocess import face_crop_to_tensor
 
 
 def predict_logits(model: NCNN, x: torch.Tensor) -> torch.Tensor:
@@ -174,7 +126,7 @@ def predict_pain(
             "predict_pain requires exactly one of cached_uncertainty or mc_passes"
         )
 
-    tensor = _crop_to_tensor(face_crop_rgb, input_size, norm_mean, norm_std)
+    tensor = face_crop_to_tensor(face_crop_rgb, input_size, norm_mean, norm_std)
 
     logits = predict_logits(model, tensor)
     if temperature_scaler is not None:

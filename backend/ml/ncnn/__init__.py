@@ -12,10 +12,13 @@ from ml.ncnn.inference import (
     predict_with_mc_dropout,
 )
 from ml.ncnn.model import NCNN
+from ml.ncnn.preprocess import crop_face_from_landmarks, face_crop_to_tensor
 
 __all__ = [
     "NCNN",
     "TemperatureScaler",
+    "crop_face_from_landmarks",
+    "face_crop_to_tensor",
     "load_ncnn_state_dict",
     "predict_logits",
     "predict_pain",
