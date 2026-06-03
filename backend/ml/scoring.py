@@ -3,8 +3,10 @@ prob_pain, and uncertainty-weighted fusion with audio.
 
 Both-modalities-absent policy: do not fabricate a composite. If a prior
 fresh composite exists on the stream, hold it tagged stale with an age in
-frames so the dashboard can render the staleness. With no prior composite,
-report signal_status unavailable and composite_score None.
+frames so the dashboard can render the staleness. Past a hard cap
+(settings.max_stale_age_frames), the held value flips to signal_status
+unavailable and composite_score None. A minutes-old number rendered as if
+current is worse than an honest no-signal.
 
 TODO(phase 7): hysteresis-based episode detection for alerting, with separate
 enter and exit thresholds across a time window so a single elevated frame
@@ -132,7 +134,8 @@ async def process_frame_data(
     through by the caller. Returns the result payload and the updated state.
     Absent-is-not-zero: facial fields stay None when there is no usable face,
     the smoother holds its prior value rather than averaging in a zero, and
-    a both-modalities-absent frame holds the prior composite tagged stale.
+    a both-modalities-absent frame either holds the prior composite tagged
+    stale or, past the configured cap, reports unavailable.
     """
     if stream_state is None:
         stream_state = FacialStreamState()
@@ -210,7 +213,7 @@ async def process_frame_data(
     fresh_composite_for_state: Optional[float] = composite_score
 
     # Both-modalities-absent: hold prior composite tagged stale if we have
-    # one, with an age in frames so the dashboard can render the staleness.
+    # one, up to the configured cap. Past the cap, flip to unavailable.
     if signal_status == STATUS_UNAVAILABLE and stream_state.last_composite_score is not None:
         if stream_state.last_fresh_composite_frame is not None:
             stale_age_frames = (
@@ -218,9 +221,19 @@ async def process_frame_data(
                 + 1
                 - stream_state.last_fresh_composite_frame
             )
-        composite_score = stream_state.last_composite_score
-        stale = True
-        signal_status = STATUS_STALE
+        if (
+            stale_age_frames is not None
+            and stale_age_frames > settings.max_stale_age_frames
+        ):
+            # Honest no-signal beats a minutes-old number rendered as current.
+            composite_score = None
+            signal_status = STATUS_UNAVAILABLE
+            stale = False
+            stale_age_frames = None
+        else:
+            composite_score = stream_state.last_composite_score
+            stale = True
+            signal_status = STATUS_STALE
         fresh_composite_for_state = None
     elif signal_status == STATUS_UNAVAILABLE:
         # No prior composite to hold. Stay unavailable.

@@ -2,12 +2,15 @@
 """
 NeoGuard Model Training CLI
 
-Trains both the facial pain classifier and cry audio classifier.
+Trains the cry audio classifier. The facial pain classifier is now the
+N-CNN (see backend/ml/ncnn/); facial training belongs in a separate
+subject-wise cross-validation harness once real data is available, and is
+intentionally not implemented here. The old AU plus XGBoost facial trainer
+was removed because it trained on synthetic data and reported results, which
+this project does not do.
 
 Usage:
-    python train_models.py --model facial    # Train facial pain classifier
     python train_models.py --model cry       # Train cry audio classifier
-    python train_models.py --model all       # Train both
 """
 
 import argparse
@@ -140,202 +143,12 @@ def train_cry_classifier():
     print(f"  Scaler saved to {scaler_path}")
 
 
-def train_facial_classifier():
-    """
-    Train facial pain classifier on geometric features.
-    Uses synthetic training data from MediaPipe Face Mesh.
-    """
-    print("\n" + "=" * 60)
-    print("Training Facial Pain Classifier")
-    print("=" * 60)
-
-    from ml.face_detector import FaceDetector
-    from ml.feature_extractor import FeatureExtractor
-    import cv2
-
-    detector = FaceDetector()
-    extractor = FeatureExtractor()
-
-    # Check for FER2013 or CK+ datasets
-    fer_dir = DATA_DIR / "raw" / "fer2013"
-    ck_dir = DATA_DIR / "raw" / "ck_plus"
-
-    features_list = []
-    labels = []
-
-    # Process facial expression datasets
-    # Map expression categories to pain-relevant labels
-    # Pain-like: angry, disgust, fear, sad → higher pain proxy
-    # Non-pain: happy, surprise, neutral → lower pain proxy
-    pain_expressions = {"angry", "disgust", "fear", "sad"}
-    neutral_expressions = {"happy", "surprise", "neutral"}
-
-    for dataset_dir in [fer_dir, ck_dir]:
-        if not dataset_dir.exists():
-            print(f"  [SKIP] {dataset_dir.name} not found")
-            continue
-
-        print(f"\n  Processing {dataset_dir.name}...")
-
-        for category_dir in sorted(dataset_dir.rglob("*")):
-            if not category_dir.is_dir():
-                continue
-
-            category = category_dir.name.lower()
-            if category in pain_expressions:
-                label_score = 6.0  # Moderate-high pain proxy
-            elif category in neutral_expressions:
-                label_score = 1.0  # Low/no pain proxy
-            else:
-                continue
-
-            image_files = list(category_dir.glob("*.png")) + \
-                          list(category_dir.glob("*.jpg")) + \
-                          list(category_dir.glob("*.jpeg"))
-
-            processed = 0
-            for img_file in image_files[:500]:  # Cap per category
-                try:
-                    frame = cv2.imread(str(img_file))
-                    if frame is None:
-                        continue
-
-                    # Resize small images for MediaPipe
-                    if frame.shape[0] < 100:
-                        frame = cv2.resize(frame, (256, 256))
-
-                    detection = detector.detect(frame)
-                    if detection is None:
-                        continue
-
-                    feats = extractor.extract(detection["landmarks_px"])
-                    feat_array = extractor.features_to_array(feats)
-                    features_list.append(feat_array)
-                    labels.append(label_score)
-                    processed += 1
-                except Exception as e:
-                    pass
-
-            print(f"    {category}: {processed} faces processed → score {label_score}")
-
-    detector.close()
-
-    if len(features_list) == 0:
-        print("\n  [WARNING] No dataset images processed.")
-        print("  Training with synthetic geometric data instead...")
-        _train_facial_synthetic()
-        return
-
-    X = np.array(features_list)
-    y = np.array(labels)
-
-    X = np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)
-
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-
-    from sklearn.ensemble import RandomForestRegressor
-    model = RandomForestRegressor(n_estimators=100, max_depth=10, random_state=42)
-    model.fit(X_train, y_train)
-
-    y_pred = model.predict(X_test)
-    mae = np.mean(np.abs(y_pred - y_test))
-    print(f"\n  MAE: {mae:.3f}")
-    print(f"  Score range: {y_pred.min():.2f} - {y_pred.max():.2f}")
-
-    MODELS_DIR.mkdir(parents=True, exist_ok=True)
-    model_path = MODELS_DIR / "facial_pain_clf.joblib"
-    joblib.dump(model, model_path)
-    print(f"  Model saved to {model_path}")
-
-
-def _train_facial_synthetic():
-    """
-    Train on synthetic geometric features when no image dataset is available.
-    Generates training data based on known AU-pain relationships.
-    """
-    print("  Generating synthetic geometric training data...")
-    np.random.seed(42)
-
-    feature_names = [
-        "brow_eye_dist_norm", "inner_brow_dist_norm", "brow_slope_avg",
-        "left_ear", "right_ear", "avg_ear",
-        "nose_lip_dist_norm", "nose_length_norm",
-        "mouth_aspect_ratio", "mouth_height_norm", "mouth_width_norm", "lip_stretch_norm",
-        "eye_asymmetry",
-    ]
-
-    n_samples = 2000
-    X = []
-    y = []
-
-    for _ in range(n_samples):
-        pain_level = np.random.uniform(0, 10)
-
-        # Generate features correlated with pain level
-        pain_factor = pain_level / 10.0
-
-        features = {
-            "brow_eye_dist_norm": 0.08 - 0.04 * pain_factor + np.random.normal(0, 0.005),
-            "inner_brow_dist_norm": 0.2 - 0.08 * pain_factor + np.random.normal(0, 0.01),
-            "brow_slope_avg": 0.1 + 0.3 * pain_factor + np.random.normal(0, 0.03),
-            "left_ear": 0.35 - 0.2 * pain_factor + np.random.normal(0, 0.02),
-            "right_ear": 0.35 - 0.2 * pain_factor + np.random.normal(0, 0.02),
-            "avg_ear": 0.35 - 0.2 * pain_factor + np.random.normal(0, 0.015),
-            "nose_lip_dist_norm": 0.08 - 0.04 * pain_factor + np.random.normal(0, 0.005),
-            "nose_length_norm": 0.12 + 0.02 * pain_factor + np.random.normal(0, 0.005),
-            "mouth_aspect_ratio": 0.1 + 0.6 * pain_factor + np.random.normal(0, 0.05),
-            "mouth_height_norm": 0.05 + 0.1 * pain_factor + np.random.normal(0, 0.01),
-            "mouth_width_norm": 0.3 + 0.1 * pain_factor + np.random.normal(0, 0.02),
-            "lip_stretch_norm": 0.08 + 0.12 * pain_factor + np.random.normal(0, 0.01),
-            "eye_asymmetry": 0.05 + 0.2 * pain_factor + np.random.normal(0, 0.03),
-        }
-
-        X.append([features[name] for name in feature_names])
-        y.append(pain_level)
-
-    X = np.array(X)
-    y = np.array(y)
-
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-
-    model = XGBClassifier(
-        n_estimators=100,
-        max_depth=6,
-        learning_rate=0.1,
-        use_label_encoder=False,
-        eval_metric="rmse",
-        random_state=42,
-    )
-
-    # Use regression via XGBRegressor for continuous pain scores
-    from xgboost import XGBRegressor
-    model = XGBRegressor(
-        n_estimators=100,
-        max_depth=6,
-        learning_rate=0.1,
-        random_state=42,
-    )
-    model.fit(X_train, y_train)
-
-    y_pred = model.predict(X_test)
-    mae = np.mean(np.abs(y_pred - y_test))
-    print(f"  Synthetic model MAE: {mae:.3f}")
-
-    MODELS_DIR.mkdir(parents=True, exist_ok=True)
-    model_path = MODELS_DIR / "facial_pain_clf.joblib"
-    joblib.dump(model, model_path)
-    print(f"  Model saved to {model_path}")
-
-
 def main():
     parser = argparse.ArgumentParser(description="NeoGuard Model Training")
-    parser.add_argument("--model", choices=["facial", "cry", "all"], default="all")
+    parser.add_argument("--model", choices=["cry"], default="cry")
     args = parser.parse_args()
 
-    if args.model in ("facial", "all"):
-        train_facial_classifier()
-
-    if args.model in ("cry", "all"):
+    if args.model == "cry":
         train_cry_classifier()
 
     print("\n" + "=" * 60)

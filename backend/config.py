@@ -21,10 +21,10 @@ class Settings(BaseSettings):
 
     # Model paths
     models_dir: Path = Path(__file__).parent / "models"
-    facial_model_path: Path = Path(__file__).parent / "models" / "facial_pain_clf.joblib"
     cry_model_path: Path = Path(__file__).parent / "models" / "cry_clf.joblib"
-    # Facial model checkpoint path for the N-CNN. None until a subject-wise CV
-    # training run produces one. The N-CNN ships with random weights until then.
+    # Facial model checkpoint path. None until a subject-wise CV training run
+    # produces one. NCNNFacialPainClassifier currently ships with random
+    # weights; predictions are not meaningful until this is set.
     ncnn_checkpoint_path: Path | None = None
 
     # WebSocket
@@ -59,6 +59,12 @@ class Settings(BaseSettings):
     # alpha is more smoothing. Operates per frame; at constant FPS, the
     # effective half-life in frames is ln(0.5) / ln(1 - alpha).
     ema_smoother_alpha: float = 0.2
+    # Hard cap on how long a both-modalities-absent composite may be held as
+    # stale. Past this age the composite flips to None with signal_status
+    # unavailable, because a minutes-old number rendered as if current is
+    # worse than an honest no-signal. Counted in frames; at ~30 FPS the
+    # default below is ~10 seconds.
+    max_stale_age_frames: int = 300
 
     class Config:
         env_prefix = "NEOGUARD_"

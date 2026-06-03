@@ -1,59 +1,139 @@
-# NeoGuard — Neonatal Pain Detection System
+# NeoGuard
 
-AI-powered continuous pain monitoring for NICU neonates using facial expression analysis and cry audio classification.
+Continuous neonatal pain monitoring research prototype.
 
-## The Problem
+**Research prototype, not a medical device.** No claim is made about clinical
+readiness. The facial model currently ships with random weights; predictions
+are not meaningful until a checkpoint is trained on properly accessed data
+under subject-wise cross-validation. Do not use as a clinical assessment.
 
-Premature and critically ill neonates in NICUs experience frequent painful procedures but are often too weak to cry. Current pain assessment relies on sporadic manual scoring by nurses. The only commercial solution (PainChek) does 3-second snapshots. NeoGuard provides **continuous real-time monitoring** with automatic nurse alerts.
+## Why
 
-## How It Works
+NICU neonates undergo frequent painful procedures and are often too weak to
+cry visibly. Continuous, multi-modal monitoring is a research direction for
+filling the gap between sporadic nurse-scored assessments and silent
+distress.
+
+## Pipeline
 
 ```
-Camera Feed → MediaPipe Face Mesh → AU-proxy Features → Pain Classifier ─┐
-                                                                          ├─→ Composite Score → Dashboard + Alerts
-Microphone  → librosa Features    → Cry Classifier    → Pain/Non-pain ──┘
+                ┌───────────────────────────────────────────────┐
+Camera frame ──▶│ MediaPipe Face Mesh   (presence + occlusion   │
+                │                        gate; not a feature    │
+                │                        extractor)             │
+                └────────────────┬──────────────────────────────┘
+                                 │ accepted face crop (RGB, 120x120)
+                                 ▼
+                ┌───────────────────────────────────────────────┐
+                │ N-CNN (three branches: generic 5x5, deep 3x3, │
+                │ prominent 7x7; concat; merge conv; classifier)│
+                │ Cheap deterministic pass every frame.         │
+                │ MC dropout (K passes) on a throttled cadence  │
+                │ for uncertainty.                              │
+                │ Temperature scaling on the logits.            │
+                └────────────────┬──────────────────────────────┘
+                                 │ {prob_pain, uncertainty}
+                                 ▼
+                ┌───────────────────────────────────────────────┐
+                │ EMA smoother on prob_pain (holds on absent    │
+                │ frames; absent is not zero).                  │
+                └────────────────┬──────────────────────────────┘
+                                 │
+Audio chunk ──▶ Cry analyzer ────┤
+                                 ▼
+                ┌───────────────────────────────────────────────┐
+                │ Uncertainty-weighted fusion                   │
+                │   effective_facial_w =                        │
+                │     (1 - clip(uncertainty, 0, 1)) * base_w    │
+                │   renormalised against audio weight per frame │
+                │ Both absent: hold prior composite tagged      │
+                │   stale, up to max_stale_age_frames; past     │
+                │   the cap, signal_status = unavailable.       │
+                └────────────────┬──────────────────────────────┘
+                                 │ {composite_score, signal_status,
+                                 │  fusion_weights, pain_label}
+                                 ▼
+                            Dashboard
 ```
 
-### Facial Pain Detection
-- **MediaPipe Face Mesh** extracts 468 facial landmarks in real-time
-- Geometric features map to neonatal pain Action Units (AU4, AU6+7, AU9+10, AU43, AU27)
-- XGBoost/RandomForest classifier produces pain score 0-10
+### Facial path (N-CNN)
 
-### Cry Audio Classification
-- **librosa** extracts MFCCs, spectral centroid, F0, RMS energy
-- XGBoost classifier distinguishes pain cries from hunger/tired/discomfort
-- Trained on 3 Kaggle infant cry datasets (294 MB total)
+Clean-room reimplementation of the Zamzmi et al. (IJCNN 2019) N-CNN
+topology. Three parallel branches over the same 120x120 RGB face crop:
 
-### Composite Scoring (NIPS-Inspired)
-| Score | Level | Action |
-|-------|-------|--------|
-| 0-1 | No Pain (green) | — |
-| 2-3 | Mild Discomfort (yellow) | Monitor |
-| 4-6 | Moderate Pain (orange) | Notify nurse |
-| 7-10 | Severe Pain (red) | Urgent alert |
+- **Generic branch** (5x5 conv, broad facial structure)
+- **Deep branch** (two stacked 3x3 convs, finer features)
+- **Prominent branch** (7x7 conv, salient pain regions: brow, eyes,
+  nasolabial fold)
 
-**Weights:** Facial 70% + Audio 30%
+Branches are concatenated along the channel axis (32 + 64 + 32 = 128),
+passed through a 3x3 merge conv and pool, flattened, and run through a
+two-layer classifier with dropout to two logits. Output is a calibrated
+pain probability via temperature scaling, plus an uncertainty estimate
+via Monte Carlo dropout. See `backend/ml/ncnn/` and
+`NCNN_implementation_spec.md`.
 
-## Tech Stack
+MediaPipe Face Mesh is used **only** as a presence and occlusion gate.
+The N-CNN never sees the mesh or any AU-proxy geometric features. The
+hand-rolled AU-plus-XGBoost facial scorer has been retired.
+
+### Audio path
+
+Cry analyzer extracts MFCCs, spectral features, and F0; XGBoost classifier
+(or a spectral heuristic fallback) emits a `pain` vs `non-pain` cry score.
+
+### Fusion
+
+Uncertainty-weighted: facial weight is scaled by `(1 - clip(uncertainty))`
+and the result is renormalised against the audio weight per frame. High
+facial uncertainty shifts the composite toward audio; low uncertainty
+preserves the facial signal. Both modalities absent hold the prior
+composite tagged stale, with a hard cap past which the signal flips to
+unavailable rather than presenting a stale number as current.
+
+`alert_level` and `pain_label` are display strings only. They do not page
+anyone. A hysteresis-based episode detector for real alerting is deferred
+(see `TODO(phase 7)` in `backend/ml/fusion.py` and `backend/ml/scoring.py`)
+until trial data can set the thresholds.
+
+## Status
+
+- N-CNN module implemented per spec, with shape and branch-merge tests.
+- Calibrated inference path: temperature scaling, MC dropout, `predict_pain`.
+- MediaPipe-driven face crop gate with err-toward-None on partial visibility.
+- FastAPI wiring: WebSocket carries per-connection cadence and smoother state.
+- EMA smoothing and uncertainty-weighted fusion in production code paths.
+- Stale composite hold with hard age cap.
+- AU-plus-XGBoost facial scorer retired.
+
+What is **not** done:
+
+- Training. There is no checkpoint. The N-CNN currently runs on random
+  weights and predictions are not meaningful.
+- Real evaluation. No accuracy, F1, AUC, or calibration numbers are
+  reported anywhere because no honest number exists yet. Subject-wise
+  cross-validation is the only acceptable split when training does happen.
+- Episode-detection alerting. Display bands are not alerts.
+
+## Tech stack
 
 | Layer | Technology |
 |-------|-----------|
 | Frontend | React 18 + Vite + TailwindCSS + Recharts |
-| Backend | FastAPI + Python 3.11 + SQLAlchemy + SQLite |
+| Backend | FastAPI + Python 3.11+ + SQLAlchemy + SQLite |
 | Real-time | WebSockets |
-| CV | MediaPipe Face Mesh + OpenCV |
-| ML | scikit-learn + XGBoost |
-| Audio | librosa |
+| Face gate | MediaPipe Face Mesh + OpenCV |
+| Facial classifier | PyTorch (N-CNN, custom) |
+| Audio classifier | librosa + XGBoost |
+| Tests | pytest |
 | Deployment | Docker Compose |
 
-## Quick Start
+## Quick start
 
-### Prerequisites
-- Python 3.11+
-- Node.js 18+
-- Kaggle API credentials (for dataset download)
+Prerequisites: Python 3.11+, Node 18+.
 
 ### Backend
+
 ```bash
 cd backend
 python -m venv venv
@@ -62,55 +142,103 @@ pip install -r requirements.txt
 uvicorn main:app --reload --port 8000
 ```
 
+The N-CNN initializes with random weights and logs a loud WARNING saying
+so. The pipeline runs end-to-end; the numbers it produces are not.
+
 ### Frontend
+
 ```bash
 cd frontend
 npm install
 npm run dev
 ```
 
-### Train Models
-```bash
-# Download datasets
-python ml_training/scripts/download_datasets.py
+### Tests
 
-# Train classifiers
-python ml_training/scripts/train_models.py --model all
+```bash
+cd backend
+source venv/bin/activate
+pytest tests/
 ```
 
-### Docker
+### Local webcam pipeline check
+
 ```bash
-docker-compose up --build
+cd backend
+source venv/bin/activate
+python demo_webcam.py
 ```
 
-## API Documentation
+This displays prob_pain, uncertainty, and `frame_to_score_ms` over the
+camera feed. It is a pipeline sanity check, nothing more.
 
-Once running, visit `http://localhost:8000/docs` for interactive Swagger docs.
+### Train the cry classifier
 
-### Key Endpoints
-- `GET /api/patients/` — List patients
-- `POST /api/patients/` — Add patient
-- `GET /api/scores/{patient_id}` — Pain score history
-- `WS /ws/monitor/{patient_id}` — Real-time monitoring
-- `WS /ws/dashboard` — Dashboard broadcast feed
+```bash
+python ml_training/scripts/train_models.py --model cry
+```
 
-## Project Structure
+Facial training is deliberately not in this script. It belongs in a
+subject-wise cross-validation harness that does not exist yet. The previous
+synthetic-data facial trainer has been removed.
+
+## API
+
+`http://localhost:8000/docs` once the backend is running.
+
+### Notable endpoints
+
+- `POST /api/analyze/frame`: single-frame analysis. Stateless; MC dropout
+  runs on every call.
+- `WS /ws/monitor/{patient_id}`: live stream. Owns per-connection
+  cadence, smoother, and stale-composite state.
+- `WS /ws/dashboard`: broadcast feed.
+
+### Payload fields
+
+- `prob_pain`: raw calibrated probability from the latest frame, or null.
+- `prob_pain_smoothed`: EMA-smoothed probability carried across frames.
+- `uncertainty`: MC dropout standard deviation. Cached between MC refreshes.
+- `facial_score`, `audio_score`, `composite_score`: null when the
+  corresponding signal is absent. **Never zero stand-ins.**
+- `signal_status`: `fresh`, `facial_only`, `audio_only`, `stale`, or
+  `unavailable`.
+- `stale`, `stale_age_frames`: set when a held composite is being shown
+  because both modalities are currently absent.
+- `fusion_weights`: the actual `{facial, audio}` weights used this frame
+  after uncertainty scaling and renormalisation.
+- `frame_to_score_ms`: end-to-end facial pipeline latency.
+- `pain_label`, `alert_level`: **display only**, not clinical and not an
+  alert.
+
+## Project layout
 
 ```
 NeoGuard/
-├── backend/          # FastAPI + ML pipeline
-│   ├── ml/           # Face detector, feature extractor, classifiers, scoring
-│   ├── routers/      # REST + WebSocket endpoints
-│   └── db/           # SQLAlchemy models
-├── frontend/         # React dashboard
-│   └── src/components/  # PainGauge, PainChart, CameraFeed, etc.
-├── ml_training/      # Training scripts + notebooks
-└── data/             # Datasets (not committed)
+├── backend/
+│   ├── ml/
+│   │   ├── ncnn/              # N-CNN model, calibration, preprocess,
+│   │   │                      # inference, stream state, prob_to_score
+│   │   ├── ncnn_classifier.py # facial pipeline wrapper
+│   │   ├── face_detector.py   # MediaPipe gate
+│   │   ├── smoother.py        # EMA on prob_pain
+│   │   ├── fusion.py          # uncertainty-weighted fusion
+│   │   ├── cry_analyzer.py    # audio path
+│   │   └── scoring.py         # WebSocket processing
+│   ├── routers/
+│   └── tests/
+├── frontend/
+├── ml_training/scripts/       # cry training only
+└── NCNN_implementation_spec.md
 ```
 
-## Impact
+## References
 
-- **1 in 10 babies** need NICU care
-- Premature infants undergo **10-18 painful procedures daily**
-- Many are too weak to cry — their pain goes undetected
-- NeoGuard fills this gap with continuous, AI-powered monitoring
+- Zamzmi et al. Pain assessment from facial expression: Neonatal
+  convolutional neural network (N-CNN). IJCNN 2019.
+- Ferreira et al. Revisiting N-CNN for Clinical Practice. PRIME workshop,
+  Springer, 2023.
+- Ferreira et al. Disclosing neonatal pain in real-time. Computers in
+  Biology and Medicine, 2025.
+- Salekin et al. USF-MNPAD-I multimodal neonatal pain dataset. Data in
+  Brief, 2021.

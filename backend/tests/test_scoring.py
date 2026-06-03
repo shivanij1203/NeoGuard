@@ -243,6 +243,38 @@ def test_both_absent_with_no_history_is_unavailable(_swap_facial_classifier):
 
 
 @pytest.mark.integration
+def test_stale_composite_flips_to_unavailable_past_the_cap(_swap_facial_classifier, monkeypatch):
+    """Hold the stale composite up to max_stale_age_frames, then flip to
+    unavailable. A minutes-old number rendered as if current is worse than
+    an honest no-signal."""
+    from config import settings
+    monkeypatch.setattr(settings, "max_stale_age_frames", 3)
+
+    state = FacialStreamState()
+    payload = _frame_payload()
+
+    # Frame 1: face detected, fresh composite cached.
+    r1, state = _run(scoring_mod.process_frame_data(payload, 1, state))
+    assert r1["composite_score"] == 6.0
+    assert r1["signal_status"] == "facial_only"
+
+    # Frames 2..4: face absent. Hold stale up to age = max_stale_age_frames.
+    _swap_facial_classifier.face_detected_default = False
+    for expected_age in (1, 2, 3):
+        r, state = _run(scoring_mod.process_frame_data(payload, 1, state))
+        assert r["signal_status"] == "stale", f"age={expected_age}"
+        assert r["composite_score"] == 6.0
+        assert r["stale_age_frames"] == expected_age
+
+    # Frame 5: age = 4 > 3 cap. Flip to unavailable.
+    r5, state = _run(scoring_mod.process_frame_data(payload, 1, state))
+    assert r5["signal_status"] == "unavailable"
+    assert r5["composite_score"] is None
+    assert r5["stale"] is False
+    assert r5["alert_level"] == "unavailable"
+
+
+@pytest.mark.integration
 def test_uncertainty_weighted_fusion_shifts_to_audio(_swap_facial_classifier):
     """High facial uncertainty should pull the composite toward the audio
     score when both are present."""
