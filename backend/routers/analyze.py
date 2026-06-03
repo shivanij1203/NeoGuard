@@ -1,8 +1,8 @@
 """REST analyze endpoints. Stateless one-shot scoring.
 
-The WebSocket path owns cadence. These endpoints do not carry state across
-calls; each call stands on its own and runs MC dropout every time because
-there is no stream cadence to throttle against.
+The WebSocket path owns smoothing and cadence. These endpoints intentionally
+do not smooth across calls; each call stands on its own. MC dropout runs on
+every call because there is no stream cadence to throttle against.
 
 Research prototype, not a medical device.
 """
@@ -17,10 +17,12 @@ import numpy as np
 from fastapi import APIRouter, File, UploadFile
 from pydantic import BaseModel
 
+from config import settings
+from ml.fusion import STATUS_UNAVAILABLE, fuse_uncertainty_weighted
 from ml.ncnn.scale import prob_to_score
 from ml.scoring import (
     UNAVAILABLE_LABEL,
-    compute_composite_score,
+    _alert_level,
     get_cry_analyzer,
     get_facial_classifier,
     get_pain_label,
@@ -50,6 +52,8 @@ class AnalysisResponse(BaseModel):
     prob_pain: float | None = None
     uncertainty: float | None = None
     frame_to_score_ms: float | None = None
+    signal_status: str = STATUS_UNAVAILABLE
+    fusion_weights: dict = {"facial": 0.0, "audio": 0.0}
 
 
 @router.post("/frame", response_model=AnalysisResponse)
@@ -68,14 +72,25 @@ async def analyze_frame(request: FrameRequest):
 
         face_detected = bool(result.get("face_detected"))
         prob_pain = result.get("prob_pain")
-        facial_score = (
-            prob_to_score(prob_pain)
-            if (face_detected and prob_pain is not None)
-            else None
+        uncertainty = result.get("uncertainty")
+
+        # Stateless path: no smoother. Facial score is prob_to_score on the
+        # raw prob_pain.
+        if face_detected and prob_pain is not None:
+            facial_score = prob_to_score(prob_pain)
+        else:
+            facial_score = None
+
+        fusion = fuse_uncertainty_weighted(
+            facial_score=facial_score,
+            uncertainty=uncertainty if face_detected else None,
+            audio_score=None,
+            base_facial_weight=settings.facial_weight,
+            base_audio_weight=settings.audio_weight,
         )
 
-        composite = compute_composite_score(facial_score, None)
-        label = get_pain_label(composite["composite_score"])
+        label = get_pain_label(fusion["composite_score"])
+        alert = _alert_level(fusion["composite_score"], fusion["signal_status"])
 
         landmarks_list = None
         if result.get("landmarks") is not None:
@@ -85,17 +100,19 @@ async def analyze_frame(request: FrameRequest):
             face_detected=face_detected,
             facial_score=facial_score,
             audio_score=None,
-            composite_score=composite["composite_score"],
-            alert_level=composite["alert_level"],
+            composite_score=fusion["composite_score"],
+            alert_level=alert,
             pain_label=label,
-            features=None,
+            features=result.get("features"),
             cry_detected=False,
             cry_type="no_cry",
             timestamp=datetime.utcnow().isoformat(),
             landmarks=landmarks_list,
             prob_pain=prob_pain,
-            uncertainty=result.get("uncertainty"),
+            uncertainty=uncertainty,
             frame_to_score_ms=result.get("frame_to_score_ms"),
+            signal_status=fusion["signal_status"],
+            fusion_weights=fusion["weights_used"],
         )
 
     except Exception as e:
@@ -112,14 +129,23 @@ async def analyze_audio(file: UploadFile = File(...)):
         result = analyzer.predict_from_bytes(contents)
 
         audio_score = result["audio_score"] if result["cry_detected"] else None
-        composite = compute_composite_score(None, audio_score)
-        label = get_pain_label(composite["composite_score"])
+        fusion = fuse_uncertainty_weighted(
+            facial_score=None,
+            uncertainty=None,
+            audio_score=audio_score,
+            base_facial_weight=settings.facial_weight,
+            base_audio_weight=settings.audio_weight,
+        )
+        label = get_pain_label(fusion["composite_score"])
+        alert = _alert_level(fusion["composite_score"], fusion["signal_status"])
 
         return {
             **result,
-            "composite_score": composite["composite_score"],
-            "alert_level": composite["alert_level"],
+            "composite_score": fusion["composite_score"],
+            "alert_level": alert,
             "pain_label": label,
+            "signal_status": fusion["signal_status"],
+            "fusion_weights": fusion["weights_used"],
             "timestamp": datetime.utcnow().isoformat(),
         }
     except Exception as e:
@@ -130,6 +156,7 @@ async def analyze_audio(file: UploadFile = File(...)):
             "audio_score": None,
             "composite_score": None,
             "alert_level": "unavailable",
+            "signal_status": STATUS_UNAVAILABLE,
             "error": str(e),
         }
 
@@ -150,4 +177,6 @@ def _empty_response() -> AnalysisResponse:
         prob_pain=None,
         uncertainty=None,
         frame_to_score_ms=None,
+        signal_status=STATUS_UNAVAILABLE,
+        fusion_weights={"facial": 0.0, "audio": 0.0},
     )

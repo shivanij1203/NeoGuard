@@ -55,6 +55,10 @@ class Settings(BaseSettings):
     ncnn_crop_margin_ratio: float = 0.15
     # Minimum bbox side (post-margin) in pixels. Smaller crops are rejected.
     ncnn_min_face_size_px: int = 32
+    # Exponential moving average smoother on the calibrated prob_pain. Smaller
+    # alpha is more smoothing. Operates per frame; at constant FPS, the
+    # effective half-life in frames is ln(0.5) / ln(1 - alpha).
+    ema_smoother_alpha: float = 0.2
 
     class Config:
         env_prefix = "NEOGUARD_"
