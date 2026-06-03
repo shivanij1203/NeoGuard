@@ -115,6 +115,23 @@ What is **not** done:
   cross-validation is the only acceptable split when training does happen.
 - Episode-detection alerting. Display bands are not alerts.
 
+## Next steps
+
+In order:
+
+1. **Request USF-MNPAD-I access** for real NICU data with NIPS or N-PASS
+   labels. This is the gating dependency; nothing meaningful downstream can
+   start without it.
+2. **Train the N-CNN under the subject-wise CV split** in
+   `backend/ml/ncnn/cross_validation.py`, fitting the temperature scaler on a
+   subject-disjoint held-out fold. No subject may appear in more than one fold.
+   A frame-level split is a bug.
+3. **Implement the deferred hysteresis episode detector** for alerting, with
+   thresholds set from trial data rather than guessed.
+
+No accuracy, F1, AUC, or calibration metric can be claimed until that path
+runs end-to-end against real labelled data under the subject-wise split.
+
 ## Tech stack
 
 | Layer | Technology |
@@ -218,7 +235,8 @@ NeoGuard/
 ├── backend/
 │   ├── ml/
 │   │   ├── ncnn/              # N-CNN model, calibration, preprocess,
-│   │   │                      # inference, stream state, prob_to_score
+│   │   │                      # inference, stream state, prob_to_score,
+│   │   │                      # subject-wise cross-validation split
 │   │   ├── ncnn_classifier.py # facial pipeline wrapper
 │   │   ├── face_detector.py   # MediaPipe gate
 │   │   ├── smoother.py        # EMA on prob_pain
