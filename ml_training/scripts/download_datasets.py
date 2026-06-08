@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-# Downloads cry audio + facial expression datasets from Kaggle.
+"""
+Download cry audio datasets from Kaggle for NeoGuard training.
+Requires: pip install kaggle
+Setup: Place kaggle.json in ~/.kaggle/ with your API credentials.
+"""
 
 import os
 import subprocess
@@ -37,7 +41,7 @@ def download_dataset(name: str, dataset_info: dict):
     dest.mkdir(parents=True, exist_ok=True)
 
     if any(dest.iterdir()):
-        print(f"  [SKIP] {name} — already downloaded at {dest}")
+        print(f"  [SKIP] {name}: already downloaded at {dest}")
         return
 
     print(f"  [DOWNLOADING] {dataset_info['description']}")

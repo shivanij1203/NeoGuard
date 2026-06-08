@@ -17,7 +17,7 @@ export function getPainColor(score) {
 }
 
 export function formatScore(score) {
-  return typeof score === 'number' ? score.toFixed(1) : '—';
+  return typeof score === 'number' ? score.toFixed(1) : '–';
 }
 
 export function shouldAlert(score) {

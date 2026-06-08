@@ -43,6 +43,3 @@ test_videos/
 *.mp4
 *.avi
 *.mov
-
-# Trained model binaries (regenerate with: python inference/train_models.py)
-inference/models/*.pkl

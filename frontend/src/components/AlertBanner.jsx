@@ -42,7 +42,7 @@ export default function AlertBanner({ alerts, onDismiss }) {
               />
               <div>
                 <p className={`font-semibold text-sm ${urgent ? 'text-red-400' : 'text-orange-400'}`}>
-                  {urgent ? 'URGENT' : 'ALERT'}: {level.label} — Bed {alert.bedNumber}
+                  {urgent ? 'URGENT' : 'ALERT'}: {level.label}, Bed {alert.bedNumber}
                 </p>
                 <p className="text-xs text-slate-400">
                   Patient: {alert.patientName} | Score: {alert.score.toFixed(1)} | {alert.timestamp}

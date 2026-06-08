@@ -1,4 +1,4 @@
-# Quality filter for NICU images — rejects dark frames and frames without
+# Quality filter for NICU images: rejects dark frames and frames without
 # visible faces, based on thresholds from IEEE Access 2024 neonatal face paper.
 
 import cv2

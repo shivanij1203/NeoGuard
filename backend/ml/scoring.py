@@ -1,23 +1,67 @@
-import numpy as np
+"""Scoring layer: N-CNN facial classifier wiring, EMA temporal smoothing on
+prob_pain, and uncertainty-weighted fusion with audio.
+
+Both-modalities-absent policy: do not fabricate a composite. If a prior
+fresh composite exists on the stream, hold it tagged stale with an age in
+frames so the dashboard can render the staleness. Past a hard cap
+(settings.max_stale_age_frames), the held value flips to signal_status
+unavailable and composite_score None. A minutes-old number rendered as if
+current is worse than an honest no-signal.
+
+TODO(phase 7): hysteresis-based episode detection for alerting, with separate
+enter and exit thresholds across a time window so a single elevated frame
+does not page anyone. Alerts are deferred until trial data sets the
+thresholds; no alerting is wired here.
+
+Research prototype, not a medical device.
+"""
+from __future__ import annotations
+
 import base64
-import cv2
 import logging
-from datetime import datetime
+from typing import Optional
+
+import cv2
+import numpy as np
 
 from config import settings
-from ml.pain_classifier import FacialPainClassifier
 from ml.cry_analyzer import CryAnalyzer
+from ml.fusion import (
+    STATUS_OUT_OF_DISTRIBUTION,
+    STATUS_STALE,
+    STATUS_UNAVAILABLE,
+    fuse_uncertainty_weighted,
+)
+from ml.ncnn.scale import prob_to_score
+from ml.ncnn.stream_state import FacialStreamState
+from ml.ncnn_classifier import NCNNFacialPainClassifier
+from ml.smoother import ema_update
 
 logger = logging.getLogger(__name__)
 
-_facial_classifier: FacialPainClassifier | None = None
-_cry_analyzer: CryAnalyzer | None = None
+# Pain label used when no composite is available. Keeps the dashboard contract
+# from breaking on None and avoids fabricating a "No Pain" label for an
+# absent signal.
+UNAVAILABLE_LABEL = {"level": "Signal Unavailable", "color": "#9ca3af", "severity": -1}
+
+# Pain label when the detected face is rejected as not-the-infant. Distinct
+# from the unavailable label so the dashboard can say why there is no score
+# instead of implying a transient signal dropout.
+SUBJECT_NOT_RECOGNIZED_LABEL = {
+    "level": "Subject Not Recognized",
+    "color": "#94a3b8",
+    "severity": -1,
+}
+
+# Singleton instances.
+_facial_classifier: Optional[NCNNFacialPainClassifier] = None
+_cry_analyzer: Optional[CryAnalyzer] = None
 
 
-def get_facial_classifier() -> FacialPainClassifier:
+def get_facial_classifier() -> NCNNFacialPainClassifier:
     global _facial_classifier
     if _facial_classifier is None:
-        _facial_classifier = FacialPainClassifier()
+        _facial_classifier = NCNNFacialPainClassifier()
     return _facial_classifier
 
 
@@ -28,56 +72,135 @@ def get_cry_analyzer() -> CryAnalyzer:
     return _cry_analyzer
 
 
-def compute_composite_score(
-    facial_score: float | None,
-    audio_score: float | None,
-) -> dict:
-    facial_w = settings.facial_weight
-    audio_w = settings.audio_weight
+def get_pain_label(score: Optional[float]) -> dict:
+    """Human-readable pain band for the dashboard.
 
-    if facial_score is not None and audio_score is not None:
-        composite = facial_w * facial_score + audio_w * audio_score
-    elif facial_score is not None:
-        composite = facial_score
-    elif audio_score is not None:
-        composite = audio_score
-    else:
-        composite = 0.0
-
-    composite = round(np.clip(composite, 0, 10), 2)
-
-    if composite >= settings.pain_urgent_threshold:
-        alert_level = "severe"
-    elif composite >= settings.pain_alert_threshold:
-        alert_level = "moderate"
-    else:
-        alert_level = "none"
-
-    return {
-        "composite_score": composite,
-        "alert_level": alert_level,
-        "facial_score": facial_score,
-        "audio_score": audio_score,
-    }
-
-
-def get_pain_label(score: float) -> dict:
+    Reuses the same 0-to-10 scale as prob_to_score, so the band the dashboard
+    shows is computed from the same number the classifier produced. Returns
+    the unavailable label when there is no composite score.
+    """
+    if score is None:
+        return UNAVAILABLE_LABEL
     if score <= 1:
         return {"level": "No Pain", "color": "#22c55e", "severity": 0}
-    elif score <= 3:
+    if score <= 3:
         return {"level": "Mild Discomfort", "color": "#eab308", "severity": 1}
-    elif score <= 6:
+    if score <= 6:
         return {"level": "Moderate Pain", "color": "#f97316", "severity": 2}
-    else:
-        return {"level": "Severe Pain", "color": "#ef4444", "severity": 3}
+    return {"level": "Severe Pain", "color": "#ef4444", "severity": 3}
 
 
-async def process_frame_data(data: dict | None, patient_id: int) -> dict:
+def _alert_level(score: Optional[float], status: str) -> str:
+    """Display band derived from the fused composite.
+
+    No alerting fires here. This is a display string only, the same as today.
+    The hysteresis episode detector (TODO phase 7) is what should actually
+    drive nurse-facing alerts; this string is for the dashboard only.
+    """
+    if status == STATUS_OUT_OF_DISTRIBUTION:
+        return "out_of_distribution"
+    if status == STATUS_STALE:
+        return "stale"
+    if status == STATUS_UNAVAILABLE or score is None:
+        return "unavailable"
+    if score >= settings.pain_urgent_threshold:
+        return "severe"
+    if score >= settings.pain_alert_threshold:
+        return "moderate"
+    return "none"
+
+
+def _empty_payload(stream_state: FacialStreamState) -> tuple[dict, FacialStreamState]:
+    """Used for keep-alive frames with no data. Does not advance state."""
+    return (
+        {
+            "composite_score": None,
+            "alert_level": "unavailable",
+            "facial_score": None,
+            "audio_score": None,
+            "pain_label": UNAVAILABLE_LABEL,
+            "face_detected": False,
+            "prob_pain": None,
+            "prob_pain_smoothed": None,
+            "uncertainty": None,
+            "signal_status": STATUS_UNAVAILABLE,
+            "ood_reason": None,
+            "stale": False,
+            "stale_age_frames": None,
+            "fusion_weights": {"facial": 0.0, "audio": 0.0},
+            "frame_to_score_ms": None,
+            "cry_detected": False,
+            "cry_type": "no_cry",
+        },
+        stream_state,
+    )
+
+
+def _out_of_distribution_payload(
+    stream_state: FacialStreamState,
+    reason: Optional[str],
+    frame_to_score_ms: Optional[float],
+) -> tuple[dict, FacialStreamState]:
+    """Whole-composite hard stop when the detected face is not the infant.
+
+    Returns a None composite tagged out_of_distribution, a status distinct from
+    absent, stale, and unavailable. No audio score is emitted either: a pain
+    reading attributed to the wrong subject is worse than no reading. The frame
+    counter advances for cadence, but the smoother and the last composite are
+    held, because an out-of-distribution frame must neither feed the smoothed
+    signal nor become a value we later hold stale.
+    """
+    new_state = stream_state.advanced(
+        new_uncertainty=None,
+        new_smoothed_prob=None,
+        new_fresh_composite=None,
+    )
+    return (
+        {
+            "composite_score": None,
+            "alert_level": _alert_level(None, STATUS_OUT_OF_DISTRIBUTION),
+            "facial_score": None,
+            "audio_score": None,
+            "pain_label": SUBJECT_NOT_RECOGNIZED_LABEL,
+            "face_detected": True,
+            "prob_pain": None,
+            "prob_pain_smoothed": new_state.smoothed_prob_pain,
+            "uncertainty": None,
+            "signal_status": STATUS_OUT_OF_DISTRIBUTION,
+            "ood_reason": reason,
+            "stale": False,
+            "stale_age_frames": None,
+            "fusion_weights": {"facial": 0.0, "audio": 0.0},
+            "frame_to_score_ms": frame_to_score_ms,
+            "cry_detected": False,
+            "cry_type": "no_cry",
+        },
+        new_state,
+    )
+
+
+async def process_frame_data(
+    data: dict | None,
+    patient_id: int,
+    stream_state: Optional[FacialStreamState] = None,
+) -> tuple[dict, FacialStreamState]:
+    """Process one WebSocket frame/audio message.
+
+    Per-connection state (cadence, smoother, last composite) is threaded
+    through by the caller. Returns the result payload and the updated state.
+    Absent-is-not-zero: facial fields stay None when there is no usable face,
+    the smoother holds its prior value rather than averaging in a zero, and
+    a both-modalities-absent frame either holds the prior composite tagged
+    stale or, past the configured cap, reports unavailable.
+    """
+    if stream_state is None:
+        stream_state = FacialStreamState()
+
     if data is None:
-        return compute_composite_score(None, None)
+        return _empty_payload(stream_state)
 
-    facial_result = None
-    audio_result = None
+    facial_result: Optional[dict] = None
+    audio_result: Optional[dict] = None
 
     if "frame" in data:
         try:
@@ -86,9 +209,29 @@ async def process_frame_data(data: dict | None, patient_id: int) -> dict:
             frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
             if frame is not None:
                 classifier = get_facial_classifier()
-                facial_result = classifier.predict(frame)
+                should_refresh = stream_state.should_refresh_uncertainty(
+                    settings.ncnn_mc_interval_frames
+                )
+                facial_result = classifier.predict(
+                    frame, compute_uncertainty=should_refresh
+                )
         except Exception as e:
             logger.error(f"Error processing frame: {e}")
+
+    # Out-of-distribution hard stop. If the detected face is not the infant,
+    # the whole composite stops here: no facial score, and no audio score
+    # either. This short-circuits before fusion and before audio is scored,
+    # because a pain number attributed to the wrong subject is worse than none.
+    # TODO: adult-in-frame-while-infant-cries-offscreen. A caregiver leaning in
+    # can trip this gate while the infant is genuinely crying out of frame.
+    # Separating that case needs subject identity or a wider field of view; for
+    # now we fail closed and report out_of_distribution rather than guess.
+    if facial_result and facial_result.get("out_of_distribution"):
+        return _out_of_distribution_payload(
+            stream_state,
+            reason=facial_result.get("ood_reason"),
+            frame_to_score_ms=facial_result.get("frame_to_score_ms"),
+        )
 
     if "audio" in data:
         try:
@@ -98,42 +241,105 @@ async def process_frame_data(data: dict | None, patient_id: int) -> dict:
         except Exception as e:
             logger.error(f"Error processing audio: {e}")
 
-    out_of_distribution = bool(facial_result and facial_result.get("out_of_distribution"))
-
-    facial_score = (
-        facial_result["facial_score"]
-        if facial_result and facial_result.get("face_detected") and not out_of_distribution
-        else None
+    face_detected = bool(facial_result and facial_result.get("face_detected"))
+    raw_prob_pain = facial_result.get("prob_pain") if facial_result else None
+    fresh_uncertainty = facial_result.get("uncertainty") if facial_result else None
+    frame_to_score_ms = (
+        facial_result.get("frame_to_score_ms") if facial_result else None
     )
-    audio_score = audio_result["audio_score"] if audio_result else None
+    audio_score = audio_result.get("audio_score") if audio_result else None
 
-    if out_of_distribution:
-        composite = {
-            "composite_score": 0.0,
-            "alert_level": "none",
-            "facial_score": None,
-            "audio_score": audio_score,
-        }
-        pain_label = {"level": "Subject Not Recognized", "color": "#94a3b8", "severity": -1}
+    # EMA smoother on prob_pain. None input holds the prior smoothed value,
+    # so an absent-face frame never drags the smoothed signal toward zero.
+    smoothed_prob = ema_update(
+        prior_smoothed=stream_state.smoothed_prob_pain,
+        new_value=raw_prob_pain,
+        alpha=settings.ema_smoother_alpha,
+    )
+
+    # Facial 0-to-10 score via the single shared mapping.
+    facial_score_for_fusion: Optional[float]
+    if face_detected and smoothed_prob is not None:
+        facial_score_for_fusion = prob_to_score(smoothed_prob)
     else:
-        composite = compute_composite_score(facial_score, audio_score)
-        pain_label = get_pain_label(composite["composite_score"])
+        facial_score_for_fusion = None
 
-    result = {
-        **composite,
-        "pain_label": pain_label,
-        "face_detected": facial_result.get("face_detected", False) if facial_result else False,
-        "cry_detected": audio_result.get("cry_detected", False) if audio_result else False,
-        "cry_type": audio_result.get("cry_type", "no_cry") if audio_result else "no_cry",
-        "out_of_distribution": out_of_distribution,
-        "ood_reason": facial_result.get("ood_reason") if facial_result else None,
-    }
+    effective_uncertainty = (
+        fresh_uncertainty
+        if fresh_uncertainty is not None
+        else stream_state.cached_uncertainty
+    )
+    fusion = fuse_uncertainty_weighted(
+        facial_score=facial_score_for_fusion,
+        uncertainty=effective_uncertainty if face_detected else None,
+        audio_score=audio_score,
+        base_facial_weight=settings.facial_weight,
+        base_audio_weight=settings.audio_weight,
+    )
 
-    if facial_result and facial_result.get("face_detected"):
-        features = facial_result.get("features", {})
-        result["brow_furrow"] = features.get("brow_eye_dist_norm")
-        result["eye_squeeze"] = features.get("avg_ear")
-        result["nasolabial_furrow"] = features.get("nose_lip_dist_norm")
-        result["mouth_stretch"] = features.get("mouth_aspect_ratio")
+    composite_score = fusion["composite_score"]
+    signal_status = fusion["signal_status"]
+    stale = False
+    stale_age_frames: Optional[int] = None
+    fresh_composite_for_state: Optional[float] = composite_score
 
-    return result
+    # Both-modalities-absent: hold prior composite tagged stale if we have
+    # one, up to the configured cap. Past the cap, flip to unavailable.
+    if signal_status == STATUS_UNAVAILABLE and stream_state.last_composite_score is not None:
+        if stream_state.last_fresh_composite_frame is not None:
+            stale_age_frames = (
+                stream_state.frame_count
+                + 1
+                - stream_state.last_fresh_composite_frame
+            )
+        if (
+            stale_age_frames is not None
+            and stale_age_frames > settings.max_stale_age_frames
+        ):
+            # Honest no-signal beats a minutes-old number rendered as current.
+            composite_score = None
+            signal_status = STATUS_UNAVAILABLE
+            stale = False
+            stale_age_frames = None
+        else:
+            composite_score = stream_state.last_composite_score
+            stale = True
+            signal_status = STATUS_STALE
+        fresh_composite_for_state = None
+    elif signal_status == STATUS_UNAVAILABLE:
+        # No prior composite to hold. Stay unavailable.
+        fresh_composite_for_state = None
+
+    pain_label = get_pain_label(composite_score)
+    alert_level = _alert_level(composite_score, signal_status)
+
+    new_state = stream_state.advanced(
+        new_uncertainty=fresh_uncertainty,
+        new_smoothed_prob=smoothed_prob,
+        new_fresh_composite=fresh_composite_for_state,
+    )
+
+    return (
+        {
+            "composite_score": composite_score,
+            "alert_level": alert_level,
+            "facial_score": facial_score_for_fusion,
+            "audio_score": audio_score,
+            "pain_label": pain_label,
+            "face_detected": face_detected,
+            "prob_pain": raw_prob_pain,
+            "prob_pain_smoothed": new_state.smoothed_prob_pain,
+            "uncertainty": (
+                new_state.cached_uncertainty if face_detected else None
+            ),
+            "signal_status": signal_status,
+            "ood_reason": None,
+            "stale": stale,
+            "stale_age_frames": stale_age_frames,
+            "fusion_weights": fusion["weights_used"],
+            "frame_to_score_ms": frame_to_score_ms,
+            "cry_detected": audio_result.get("cry_detected", False) if audio_result else False,
+            "cry_type": audio_result.get("cry_type", "no_cry") if audio_result else "no_cry",
+        },
+        new_state,
+    )
