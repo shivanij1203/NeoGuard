@@ -27,7 +27,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="NeoGuard API",
-    description="Neonatal Pain Detection System — Real-time monitoring API",
+    description="Neonatal Pain Detection System, real-time monitoring API",
     version="1.0.0",
     lifespan=lifespan,
 )

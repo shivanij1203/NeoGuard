@@ -13,7 +13,7 @@ function App() {
         {activeView === 'dashboard' && <Dashboard />}
         {activeView === 'patients' && (
           <div className="flex items-center justify-center h-full text-slate-500">
-            Patient management — integrated in Dashboard view
+            Patient management, integrated in Dashboard view
           </div>
         )}
         {activeView === 'settings' && (

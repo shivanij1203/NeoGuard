@@ -41,7 +41,7 @@ def download_dataset(name: str, dataset_info: dict):
     dest.mkdir(parents=True, exist_ok=True)
 
     if any(dest.iterdir()):
-        print(f"  [SKIP] {name} — already downloaded at {dest}")
+        print(f"  [SKIP] {name}: already downloaded at {dest}")
         return
 
     print(f"  [DOWNLOADING] {dataset_info['description']}")

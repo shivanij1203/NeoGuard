@@ -45,17 +45,17 @@ export default function PatientCard({ patient, latestScore, onClick }) {
       <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-slate-400">
         <div>
           <span className="text-slate-500">Facial:</span>{' '}
-          {latestScore?.facial_score?.toFixed(1) ?? '—'}
+          {latestScore?.facial_score?.toFixed(1) ?? '–'}
         </div>
         <div>
           <span className="text-slate-500">Audio:</span>{' '}
-          {latestScore?.audio_score?.toFixed(1) ?? '—'}
+          {latestScore?.audio_score?.toFixed(1) ?? '–'}
         </div>
         <div className="flex items-center gap-1">
           <FiClock size={10} />
           {latestScore?.timestamp
             ? new Date(latestScore.timestamp).toLocaleTimeString()
-            : '—'}
+            : '–'}
         </div>
         <div>
           <span className="text-slate-500">Cry:</span>{' '}
