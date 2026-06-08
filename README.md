@@ -77,6 +77,21 @@ MediaPipe Face Mesh is used **only** as a presence and occlusion gate.
 The N-CNN never sees the mesh or any AU-proxy geometric features. The
 hand-rolled AU-plus-XGBoost facial scorer has been retired.
 
+### Input-validity gate (out of distribution)
+
+Before any scoring, a detected face is checked against two geometric ratios
+derived from the landmarks: forehead-to-chin over temple-to-temple, and
+inter-eye-corner over face width. A non-infant face (an adult leaning into
+frame, say) trips the gate, and the whole composite hard-stops: no facial
+score and no audio score, reported with `signal_status="out_of_distribution"`
+and an `ood_reason`. The model has no built-in "not sure" output, so this gate
+stands in for one rather than letting the network extrapolate on a subject it
+was never meant to score. The two thresholds are unvalidated heuristics (see
+`ood_infant_aspect_max` and `ood_infant_ipd_min` in `backend/config.py`) and
+need validation against a real infant-versus-adult sample. The gate lives in
+`backend/ml/ood_gate.py`, independent of the N-CNN. A known gap remains for the
+adult-in-frame-while-infant-cries-offscreen case; it currently fails closed.
+
 ### Audio path
 
 Cry analyzer extracts MFCCs, spectral features, and F0; XGBoost classifier
@@ -218,8 +233,10 @@ synthetic-data facial trainer has been removed.
 - `uncertainty`: MC dropout standard deviation. Cached between MC refreshes.
 - `facial_score`, `audio_score`, `composite_score`: null when the
   corresponding signal is absent. **Never zero stand-ins.**
-- `signal_status`: `fresh`, `facial_only`, `audio_only`, `stale`, or
-  `unavailable`.
+- `signal_status`: `fresh`, `facial_only`, `audio_only`, `stale`,
+  `unavailable`, or `out_of_distribution`.
+- `ood_reason`: set only when `signal_status="out_of_distribution"`, naming
+  why the face was rejected (for example `subject_not_infant`).
 - `stale`, `stale_age_frames`: set when a held composite is being shown
   because both modalities are currently absent.
 - `fusion_weights`: the actual `{facial, audio}` weights used this frame
@@ -239,6 +256,7 @@ NeoGuard/
 │   │   │                      # subject-wise cross-validation split
 │   │   ├── ncnn_classifier.py # facial pipeline wrapper
 │   │   ├── face_detector.py   # MediaPipe gate
+│   │   ├── ood_gate.py        # infant-versus-adult input-validity gate
 │   │   ├── smoother.py        # EMA on prob_pain
 │   │   ├── fusion.py          # uncertainty-weighted fusion
 │   │   ├── cry_analyzer.py    # audio path
@@ -247,6 +265,7 @@ NeoGuard/
 │   └── tests/
 ├── frontend/
 ├── ml_training/scripts/       # cry training only
+├── standalone/                # standalone NICU image quality filter
 └── NCNN_implementation_spec.md
 ```
 

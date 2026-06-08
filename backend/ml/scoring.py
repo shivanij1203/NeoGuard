@@ -27,6 +27,7 @@ import numpy as np
 from config import settings
 from ml.cry_analyzer import CryAnalyzer
 from ml.fusion import (
+    STATUS_OUT_OF_DISTRIBUTION,
     STATUS_STALE,
     STATUS_UNAVAILABLE,
     fuse_uncertainty_weighted,
@@ -42,6 +43,15 @@ logger = logging.getLogger(__name__)
 # from breaking on None and avoids fabricating a "No Pain" label for an
 # absent signal.
 UNAVAILABLE_LABEL = {"level": "Signal Unavailable", "color": "#9ca3af", "severity": -1}
+
+# Pain label when the detected face is rejected as not-the-infant. Distinct
+# from the unavailable label so the dashboard can say why there is no score
+# instead of implying a transient signal dropout.
+SUBJECT_NOT_RECOGNIZED_LABEL = {
+    "level": "Subject Not Recognized",
+    "color": "#94a3b8",
+    "severity": -1,
+}
 
 # Singleton instances.
 _facial_classifier: Optional[NCNNFacialPainClassifier] = None
@@ -87,6 +97,8 @@ def _alert_level(score: Optional[float], status: str) -> str:
     The hysteresis episode detector (TODO phase 7) is what should actually
     drive nurse-facing alerts; this string is for the dashboard only.
     """
+    if status == STATUS_OUT_OF_DISTRIBUTION:
+        return "out_of_distribution"
     if status == STATUS_STALE:
         return "stale"
     if status == STATUS_UNAVAILABLE or score is None:
@@ -112,6 +124,7 @@ def _empty_payload(stream_state: FacialStreamState) -> tuple[dict, FacialStreamS
             "prob_pain_smoothed": None,
             "uncertainty": None,
             "signal_status": STATUS_UNAVAILABLE,
+            "ood_reason": None,
             "stale": False,
             "stale_age_frames": None,
             "fusion_weights": {"facial": 0.0, "audio": 0.0},
@@ -120,6 +133,49 @@ def _empty_payload(stream_state: FacialStreamState) -> tuple[dict, FacialStreamS
             "cry_type": "no_cry",
         },
         stream_state,
+    )
+
+
+def _out_of_distribution_payload(
+    stream_state: FacialStreamState,
+    reason: Optional[str],
+    frame_to_score_ms: Optional[float],
+) -> tuple[dict, FacialStreamState]:
+    """Whole-composite hard stop when the detected face is not the infant.
+
+    Returns a None composite tagged out_of_distribution, a status distinct from
+    absent, stale, and unavailable. No audio score is emitted either: a pain
+    reading attributed to the wrong subject is worse than no reading. The frame
+    counter advances for cadence, but the smoother and the last composite are
+    held, because an out-of-distribution frame must neither feed the smoothed
+    signal nor become a value we later hold stale.
+    """
+    new_state = stream_state.advanced(
+        new_uncertainty=None,
+        new_smoothed_prob=None,
+        new_fresh_composite=None,
+    )
+    return (
+        {
+            "composite_score": None,
+            "alert_level": _alert_level(None, STATUS_OUT_OF_DISTRIBUTION),
+            "facial_score": None,
+            "audio_score": None,
+            "pain_label": SUBJECT_NOT_RECOGNIZED_LABEL,
+            "face_detected": True,
+            "prob_pain": None,
+            "prob_pain_smoothed": new_state.smoothed_prob_pain,
+            "uncertainty": None,
+            "signal_status": STATUS_OUT_OF_DISTRIBUTION,
+            "ood_reason": reason,
+            "stale": False,
+            "stale_age_frames": None,
+            "fusion_weights": {"facial": 0.0, "audio": 0.0},
+            "frame_to_score_ms": frame_to_score_ms,
+            "cry_detected": False,
+            "cry_type": "no_cry",
+        },
+        new_state,
     )
 
 
@@ -161,6 +217,21 @@ async def process_frame_data(
                 )
         except Exception as e:
             logger.error(f"Error processing frame: {e}")
+
+    # Out-of-distribution hard stop. If the detected face is not the infant,
+    # the whole composite stops here: no facial score, and no audio score
+    # either. This short-circuits before fusion and before audio is scored,
+    # because a pain number attributed to the wrong subject is worse than none.
+    # TODO: adult-in-frame-while-infant-cries-offscreen. A caregiver leaning in
+    # can trip this gate while the infant is genuinely crying out of frame.
+    # Separating that case needs subject identity or a wider field of view; for
+    # now we fail closed and report out_of_distribution rather than guess.
+    if facial_result and facial_result.get("out_of_distribution"):
+        return _out_of_distribution_payload(
+            stream_state,
+            reason=facial_result.get("ood_reason"),
+            frame_to_score_ms=facial_result.get("frame_to_score_ms"),
+        )
 
     if "audio" in data:
         try:
@@ -262,6 +333,7 @@ async def process_frame_data(
                 new_state.cached_uncertainty if face_detected else None
             ),
             "signal_status": signal_status,
+            "ood_reason": None,
             "stale": stale,
             "stale_age_frames": stale_age_frames,
             "fusion_weights": fusion["weights_used"],

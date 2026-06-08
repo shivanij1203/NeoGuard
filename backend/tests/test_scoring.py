@@ -305,3 +305,71 @@ def test_uncertainty_weighted_fusion_shifts_to_audio(_swap_facial_classifier):
         assert result["fusion_weights"]["audio"] == 1.0
     finally:
         scoring_mod._cry_analyzer = None
+
+
+@pytest.mark.integration
+def test_out_of_distribution_hard_stops_whole_composite(_swap_facial_classifier):
+    """A non-infant face must stop the whole composite: no facial score and no
+    audio score either, with a distinct signal_status. Even with a strong cry
+    present, nothing is emitted, because a pain number attributed to the wrong
+    subject is worse than none."""
+    _swap_facial_classifier.next_result = {
+        "face_detected": True,
+        "prob_pain": None,
+        "uncertainty": None,
+        "facial_score": None,
+        "landmarks": None,
+        "frame_to_score_ms": 4.0,
+        "out_of_distribution": True,
+        "ood_reason": "subject_not_infant",
+    }
+
+    class _StubCry:
+        def predict_from_bytes(self, _b):
+            return {"cry_detected": True, "cry_type": "pain", "audio_score": 8.0}
+
+    scoring_mod._cry_analyzer = _StubCry()  # type: ignore[assignment]
+    try:
+        state = FacialStreamState()
+        payload = {"frame": _frame_payload()["frame"], "audio": base64.b64encode(b"x").decode()}
+        result, new_state = _run(
+            scoring_mod.process_frame_data(payload, patient_id=1, stream_state=state)
+        )
+        assert result["signal_status"] == "out_of_distribution"
+        assert result["composite_score"] is None
+        assert result["audio_score"] is None  # audio is not emitted under OOD
+        assert result["facial_score"] is None
+        assert result["ood_reason"] == "subject_not_infant"
+        assert result["alert_level"] == "out_of_distribution"
+        assert result["face_detected"] is True
+        assert result["pain_label"]["level"] == "Subject Not Recognized"
+        assert result["stale"] is False
+        # State advanced for cadence, but no fresh composite was recorded.
+        assert new_state.frame_count == 1
+        assert new_state.last_composite_score is None
+    finally:
+        scoring_mod._cry_analyzer = None
+
+
+@pytest.mark.integration
+def test_out_of_distribution_does_not_pollute_the_smoother(_swap_facial_classifier):
+    """An OOD frame between two valid frames must not drag the smoothed prob:
+    the smoother holds its prior value across the OOD frame."""
+    state = FacialStreamState()
+    # Frame 1: valid face seeds the smoother at 0.6.
+    _, state = _run(scoring_mod.process_frame_data(_frame_payload(), 1, state))
+    assert state.smoothed_prob_pain == 0.6
+
+    # Frame 2: OOD. Smoother must hold 0.6, not move toward zero.
+    _swap_facial_classifier.next_result = {
+        "face_detected": True,
+        "prob_pain": None,
+        "uncertainty": None,
+        "facial_score": None,
+        "landmarks": None,
+        "frame_to_score_ms": 4.0,
+        "out_of_distribution": True,
+        "ood_reason": "subject_not_infant",
+    }
+    _, state = _run(scoring_mod.process_frame_data(_frame_payload(), 1, state))
+    assert state.smoothed_prob_pain == 0.6

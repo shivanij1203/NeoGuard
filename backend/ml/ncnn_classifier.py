@@ -7,13 +7,21 @@ landmark-bbox crop, and the N-CNN. Returns a contract dict that distinguishes
 Contract dict:
     {
         "face_detected": bool,
-        "prob_pain": float | None,    # None when face_detected=False
+        "prob_pain": float | None,    # None when face_detected=False or OOD
         "uncertainty": float | None,  # None when not computed this call
-        "facial_score": float | None, # None when face_detected=False; else
-                                      # prob_to_score(prob_pain) in [0, 10]
+        "facial_score": float | None, # None when face_detected=False or OOD;
+                                      # else prob_to_score(prob_pain) in [0, 10]
         "landmarks": ndarray | None,
         "frame_to_score_ms": float,
+        "out_of_distribution": bool,  # True when a face was detected but
+                                      # rejected as not-the-infant; no score
+        "ood_reason": str | None,     # set only when out_of_distribution=True
     }
+
+A detected-but-out-of-distribution face (for example an adult leaning into
+frame) returns out_of_distribution=True with prob_pain and facial_score None.
+The input-validity check lives in ml/ood_gate.py and is independent of the
+N-CNN; this class only invokes it.
 
 Absent is not zero. A None facial_score means the CNN did not score this
 frame; Phase 5 fusion treats that differently from prob_pain near zero.
@@ -47,6 +55,7 @@ from ml.ncnn.preprocess import (
     face_crop_to_tensor,
 )
 from ml.ncnn.scale import prob_to_score
+from ml.ood_gate import evaluate_input_validity
 
 logger = logging.getLogger(__name__)
 
@@ -100,6 +109,22 @@ class NCNNFacialPainClassifier:
         if detection is None:
             return self._absent_result(start_time=t0)
 
+        # Input-validity gate before any scoring. A non-infant face is rejected
+        # on face geometry rather than scored, since the model has no "not sure"
+        # output. This runs before the crop and the forward pass on purpose:
+        # there is no point spending the CNN on a subject we will not trust.
+        ood = evaluate_input_validity(
+            detection["landmarks_px"],
+            aspect_max=settings.ood_infant_aspect_max,
+            ipd_min=settings.ood_infant_ipd_min,
+        )
+        if ood.out_of_distribution:
+            return self._ood_result(
+                start_time=t0,
+                landmarks=detection["landmarks_px"],
+                reason=ood.reason,
+            )
+
         crop_rgb = crop_face_from_landmarks(
             frame_bgr,
             detection["landmarks_px"],
@@ -152,6 +177,8 @@ class NCNNFacialPainClassifier:
             "facial_score": facial_score,
             "landmarks": detection["landmarks_px"],
             "frame_to_score_ms": round(latency_ms, 2),
+            "out_of_distribution": False,
+            "ood_reason": None,
         }
 
     def _absent_result(
@@ -171,6 +198,33 @@ class NCNNFacialPainClassifier:
             "facial_score": None,
             "landmarks": landmarks,
             "frame_to_score_ms": round(latency_ms, 2),
+            "out_of_distribution": False,
+            "ood_reason": None,
+        }
+
+    def _ood_result(
+        self,
+        start_time: float,
+        landmarks: np.ndarray,
+        reason: str,
+    ) -> dict:
+        """A face was detected but rejected as not-the-infant. No score is
+        produced; the caller treats this as a whole-composite hard stop."""
+        latency_ms = (time.perf_counter() - start_time) * 1000.0
+        logger.info(
+            "frame_to_score_ms=%.1f face_detected=True out_of_distribution=True reason=%s",
+            latency_ms,
+            reason,
+        )
+        return {
+            "face_detected": True,
+            "prob_pain": None,
+            "uncertainty": None,
+            "facial_score": None,
+            "landmarks": landmarks,
+            "frame_to_score_ms": round(latency_ms, 2),
+            "out_of_distribution": True,
+            "ood_reason": reason,
         }
 
     def close(self) -> None:

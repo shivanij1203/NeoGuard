@@ -46,6 +46,10 @@ STATUS_FACIAL_ONLY = "facial_only"   # audio absent, facial carried
 STATUS_AUDIO_ONLY = "audio_only"     # facial absent, audio carried
 STATUS_STALE = "stale"               # both absent, holding prior composite
 STATUS_UNAVAILABLE = "unavailable"   # both absent, no prior composite to hold
+# Set upstream by the out-of-distribution gate, not emitted by
+# fuse_uncertainty_weighted. A non-infant face hard-stops the whole composite
+# before fusion, so it is distinct from a facial-only absence.
+STATUS_OUT_OF_DISTRIBUTION = "out_of_distribution"
 
 
 def fuse_uncertainty_weighted(

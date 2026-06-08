@@ -18,9 +18,14 @@ from fastapi import APIRouter, File, UploadFile
 from pydantic import BaseModel
 
 from config import settings
-from ml.fusion import STATUS_UNAVAILABLE, fuse_uncertainty_weighted
+from ml.fusion import (
+    STATUS_OUT_OF_DISTRIBUTION,
+    STATUS_UNAVAILABLE,
+    fuse_uncertainty_weighted,
+)
 from ml.ncnn.scale import prob_to_score
 from ml.scoring import (
+    SUBJECT_NOT_RECOGNIZED_LABEL,
     UNAVAILABLE_LABEL,
     _alert_level,
     get_cry_analyzer,
@@ -53,6 +58,7 @@ class AnalysisResponse(BaseModel):
     uncertainty: float | None = None
     frame_to_score_ms: float | None = None
     signal_status: str = STATUS_UNAVAILABLE
+    ood_reason: str | None = None
     fusion_weights: dict = {"facial": 0.0, "audio": 0.0}
 
 
@@ -69,6 +75,32 @@ async def analyze_frame(request: FrameRequest):
 
         classifier = get_facial_classifier()
         result = classifier.predict(frame, compute_uncertainty=True)
+
+        # Out-of-distribution hard stop. A non-infant face yields no score on
+        # the stateless path either; mirror the WebSocket contract.
+        if result.get("out_of_distribution"):
+            landmarks_list = None
+            if result.get("landmarks") is not None:
+                landmarks_list = result["landmarks"][:, :2].tolist()
+            return AnalysisResponse(
+                face_detected=True,
+                facial_score=None,
+                audio_score=None,
+                composite_score=None,
+                alert_level=_alert_level(None, STATUS_OUT_OF_DISTRIBUTION),
+                pain_label=SUBJECT_NOT_RECOGNIZED_LABEL,
+                features=None,
+                cry_detected=False,
+                cry_type="no_cry",
+                timestamp=datetime.utcnow().isoformat(),
+                landmarks=landmarks_list,
+                prob_pain=None,
+                uncertainty=None,
+                frame_to_score_ms=result.get("frame_to_score_ms"),
+                signal_status=STATUS_OUT_OF_DISTRIBUTION,
+                ood_reason=result.get("ood_reason"),
+                fusion_weights={"facial": 0.0, "audio": 0.0},
+            )
 
         face_detected = bool(result.get("face_detected"))
         prob_pain = result.get("prob_pain")

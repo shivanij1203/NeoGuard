@@ -19,6 +19,18 @@ class Settings(BaseSettings):
     min_detection_confidence: float = 0.5
     min_tracking_confidence: float = 0.5
 
+    # Out-of-distribution input gate (infant versus adult). The facial model has
+    # no "not sure" output, so a non-infant face is rejected on cheap face
+    # geometry before scoring rather than letting the model extrapolate on a
+    # subject it was never meant to see. Computed from MediaPipe landmarks:
+    #   face_aspect_ratio    = forehead-to-chin / temple-to-temple, flagged above the max
+    #   ipd_face_width_ratio = inter-pupillary distance / face width, flagged below the min
+    # WARNING: 1.18 and 0.40 are unvalidated heuristics. They need validation
+    # against a real infant-versus-adult sample before they can be trusted; do
+    # not read them as tuned thresholds.
+    ood_infant_aspect_max: float = 1.18
+    ood_infant_ipd_min: float = 0.40
+
     # Model paths
     models_dir: Path = Path(__file__).parent / "models"
     cry_model_path: Path = Path(__file__).parent / "models" / "cry_clf.joblib"

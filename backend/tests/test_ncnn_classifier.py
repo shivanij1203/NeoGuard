@@ -13,6 +13,14 @@ import pytest
 from ml import ncnn_classifier as ncnn_mod
 from ml.ncnn_classifier import NCNNFacialPainClassifier
 from ml.ncnn.scale import prob_to_score
+from ml.ood_gate import (
+    CHIN,
+    FOREHEAD,
+    LEFT_EYE_INNER,
+    LEFT_TEMPLE,
+    RIGHT_EYE_INNER,
+    RIGHT_TEMPLE,
+)
 
 
 @pytest.fixture(scope="module")
@@ -24,8 +32,30 @@ def _fake_frame() -> np.ndarray:
     return np.random.randint(0, 256, size=(240, 320, 3), dtype=np.uint8)
 
 
+def _landmarks(aspect: float, ipd_ratio: float) -> np.ndarray:
+    """Synthetic 468-point mesh with a target face aspect and inter-eye ratio.
+
+    Only the six indices the input-validity gate reads are positioned; the rest
+    sit at the face centre. The crop helper is monkeypatched in these tests, so
+    the exact crop geometry does not matter, only that the gate sees a valid
+    (or, where intended, invalid) face shape.
+    """
+    cx, cy, width = 160.0, 120.0, 100.0
+    pts = np.full((468, 3), [cx, cy, 0.0], dtype=np.float64)
+    pts[LEFT_TEMPLE] = (cx - width / 2.0, cy, 0.0)
+    pts[RIGHT_TEMPLE] = (cx + width / 2.0, cy, 0.0)
+    height = aspect * width
+    pts[FOREHEAD] = (cx, cy - height / 2.0, 0.0)
+    pts[CHIN] = (cx, cy + height / 2.0, 0.0)
+    ipd = ipd_ratio * width
+    pts[LEFT_EYE_INNER] = (cx - ipd / 2.0, cy - 20.0, 0.0)
+    pts[RIGHT_EYE_INNER] = (cx + ipd / 2.0, cy - 20.0, 0.0)
+    return pts
+
+
 def _fake_landmarks() -> np.ndarray:
-    return np.array([[160.0, 120.0, 0.0]] * 468)
+    """Infant-like geometry that passes the input-validity gate."""
+    return _landmarks(aspect=1.10, ipd_ratio=0.45)
 
 
 @pytest.mark.unit
@@ -98,6 +128,31 @@ def test_compute_uncertainty_false_returns_none_uncertainty(classifier, monkeypa
     assert out["prob_pain"] is not None
     assert out["uncertainty"] is None
     assert out["facial_score"] == prob_to_score(out["prob_pain"])
+
+
+@pytest.mark.unit
+def test_out_of_distribution_face_is_flagged_before_inference(classifier, monkeypatch):
+    """An adult-like face trips the input-validity gate: the classifier returns
+    out_of_distribution=True with no score, and never reaches the crop or the
+    model. The crop helper is set to raise so we prove the short-circuit."""
+    monkeypatch.setattr(
+        classifier.face_detector,
+        "detect",
+        lambda frame: {"landmarks_px": _landmarks(aspect=1.45, ipd_ratio=0.34),
+                       "frame_shape": frame.shape[:2]},
+    )
+
+    def _boom(*_a, **_k):
+        raise AssertionError("crop must not run for an out-of-distribution face")
+
+    monkeypatch.setattr(ncnn_mod, "crop_face_from_landmarks", _boom)
+
+    out = classifier.predict(_fake_frame(), compute_uncertainty=True)
+    assert out["out_of_distribution"] is True
+    assert out["ood_reason"] == "subject_not_infant"
+    assert out["face_detected"] is True
+    assert out["prob_pain"] is None
+    assert out["facial_score"] is None
 
 
 @pytest.mark.unit
